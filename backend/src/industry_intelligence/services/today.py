@@ -48,6 +48,9 @@ def sources(session):
                 latest_observed_at=batch.observed_at if batch else None,
                 latest_item_count=len(rows),
                 content_type=str(definition.list_type),
+                # Search filters canonical subjects by rank-list appearance, so only
+                # ranking/market-pulse sources are valid `/search?source=` keys.
+                searchable=True,
             )
         )
     for definition in CONTENT_SOURCES.values():
@@ -62,6 +65,7 @@ def sources(session):
                 latest_observed_at=None,
                 latest_item_count=count,
                 content_type=str(definition.content_type),
+                searchable=False,
             )
         )
     return output

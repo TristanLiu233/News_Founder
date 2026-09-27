@@ -38,6 +38,7 @@
 - Optional semantic retrieval uses an `EmbeddingProvider` abstraction and pgvector storage.
 - Search RRF and Trending RRF are separate scoring contexts.
 - Phase 3.1 adds general content ingestion, `ContentItem`, and content-to-subject links.
+- Phase 3.2 adds a read-only Subject Detail model (`services/subject_detail.py`) and a shared Next.js layout with routes `/`, `/today`, `/trending`, `/search`, and `/subject/[id]`.
 
 ## 4. Permanent Design Rules
 
@@ -66,7 +67,13 @@
   - Today: about 5 items per source by default.
   - Trending: Top 20 by default.
   - Large datasets: View More, pagination, and filters.
-- Do not add infinite scroll in Phase 3.1.
+- Subject Detail: current rank, source appearances (about 20 lists), rank history, and 10 related news per page.
+- Do not add infinite scroll.
+- Canonical Subject Detail (`/subject/{id}`) is the internal destination for Trending and Search subjects; news and source titles link to the original external URL.
+- Primary navigation is Home, Today, Trending, Search; Computer, Finance, and Gaming are tabs or filters, never top-level navigation.
+- Never create a cross-domain global ranking or compare composite scores across domains.
+- Page loads read persisted data only; they never trigger ingestion, ranking, reindexing, embeddings, or LLM calls.
+- Frontend source filters use machine source keys from `/api/v1/sources`, never hard-coded display names.
 - English and Simplified Chinese UI must remain available.
 - Locale persistence must remain functional.
 - Source failures must remain isolated during bulk ingestion.
@@ -138,25 +145,43 @@
 - Phase 3 includes SearchDocument, PostgreSQL FTS, pg_trgm, pgvector schema, embedding abstraction, hybrid search, search RRF, filters, API, and bilingual UI.
 - Live semantic-provider verification is not completed because no live multilingual provider is configured.
 - NVIDIA/英伟达 and Black Myth/黑神话 are verified by deterministic PostgreSQL tests, not observed in the current live corpus.
+- Phase 3.1 — Finance News & Content-Type Refactor: completed.
+- Phase 3.2 — Subject Detail, Related News & Page Consolidation: completed.
 
 ## 8. Current Phase
 
-- Phase 3.1 — Finance News & Content-Type Refactor: completed.
-- Split Finance into News Intelligence and Market Pulse.
-- Preserve and reclassify existing finance rankings as Market Pulse.
-- Add four maintainable finance news/feed sources, with explicit substitutions if required.
-- Add general content persistence and deterministic related-news associations.
-- Integrate related news into APIs, Trending previews, Search context, and the Finance Today UI.
+- Phase 3.2 — Subject Detail, Related News & Page Consolidation: completed on branch `phase-3.2`, pending user review (not merged, not tagged).
+- Split the former combined root page into Home, Today, and Trending routes with shared header navigation and a shared locale provider.
+- Added Subject Detail (`/subject/[id]`) backed by `GET /api/v1/subjects/{id}` and `GET /api/v1/subjects/{id}/history`, with related news reused from `GET /api/v1/news?subject_id=`.
+- Trending and Search subject names link to Subject Detail.
+- The Search source filter is built dynamically from `/api/v1/sources`.
+- No data sources, AI features, or schema changes were added.
 
 ## 9. Current Implementation Status
 
 - Twelve ranking adapters and append-only snapshot ingestion exist.
 - Today, Trending, Sources, and Search APIs exist.
-- English/Simplified Chinese Today and Search UI exists in the main Next.js page and `/search`.
+- English/Simplified Chinese UI exists for Home (`/`), Today (`/today`), Trending (`/trending`), Search (`/search`), and Subject Detail (`/subject/[id]`).
 - Search indexing refreshes incrementally after ranking ingestion.
 - Existing Finance rankings are preserved and explicitly classified as `market_pulse`.
-- Migration head is `20260927_06`; it adds content tables and rank-list semantics.
+- Migration head is `20260927_06`; it adds content tables and rank-list semantics. Phase 3.2 required no schema migration.
 - ContentItem, ContentSubjectLink, News API, Finance News UI, Trending previews, and Search context are implemented.
+
+### Page architecture (Phase 3.2)
+
+- `frontend/app/layout.tsx` wraps every page in `LocaleProvider` (`lib/i18n.tsx`, `localStorage` key `locale`) and `AppHeader` (`components/AppHeader.tsx`). Shared UI helpers live in `components/shared.tsx`; shared strings live in `common` in `lib/i18n.tsx`, and page strings stay in per-page `copy`/`labels` dictionaries.
+- `/` Home: `GET /trending?limit=5` (Top 5 per domain, Finance labelled Market Pulse) and `GET /news?domain=finance&limit=5`. No Home API exists. The legacy `/?view=trending` URL redirects to `/trending`.
+- `/today`: one domain tab at a time (`?domain=`), 5 items per source with a local View More; Finance shows Latest News first (news View More pages through `/news?source=`), with Market Pulse in a collapsed secondary section.
+- `/trending`: domain tabs (`?domain=`), Top 20 via `limit=20`, expandable to 50; trend, rank change, and source count; related-news previews only when the count is non-zero.
+- `/search`: Phase 3 behavior preserved; the source filter uses `searchable` source keys from `/api/v1/sources`, and legacy display-name URLs are mapped to keys.
+- `/subject/[id]`: loading, error, and not-found states; replaces the URL with the canonical ID after a redirect.
+
+### Subject Detail
+
+- `services/subject_detail.py`: `resolve_canonical` follows `subject_redirects`; `subject_detail` returns identity, `display_names`, ordered aliases, current ranking from `ranking.latest_successful_run`, and up to 20 source appearances (latest observation per rank list, appearance count, best rank, first seen, current-snapshot flag, registry key, and metric label). It also returns the true related-news count. `rank_history` returns successful runs newest first with `limit` and `total`. Composite entries recorded under merged duplicate IDs are included.
+- `resolution.display_names` is the single display-name rule used by Search, Trending, and Subject Detail: localized/official aliases, with a non-Chinese canonical name winning in English.
+- `/trending` gained backward-compatible `limit`, `total`, and `display_names`; `related_news_count` is now the true linked count rather than the preview length.
+- `/sources` gained `searchable`; `merge_subjects` now moves `ContentSubjectLink` rows to the canonical subject.
 - Live database verification recorded 105 content items, 0 reliable links, 340 search documents, and 976 observations.
 - Live source totals: CNBC 30, Nasdaq 15, 东方财富 30, and 新浪财经 30.
 - Repeated international-source ingestion persisted zero duplicates.
@@ -170,32 +195,36 @@
 - Public upstream sources can change structure or access behavior and require fixture-backed parsers and honest live reporting.
 - Full Subject Detail is intentionally deferred.
 - True news-topic trending requires event/topic clustering, source counts, article counts, and recency; feed positions are not a substitute.
-- The Search page source filter uses a hard-coded list of the twelve ranking-source display names (`sourceOptions` in `frontend/app/search/page.tsx`) rather than `/api/v1/sources` or the backend `SOURCES` registry; adding, renaming, or replacing a ranking source requires a manual frontend update, and a stale name is rejected by the Search API with HTTP 422.
+- Resolved in Phase 3.2: the Search source filter no longer hard-codes display names; it uses `searchable` keys from `/api/v1/sources`.
+- Live related-news links remain 0, so Subject Detail and Trending show only the empty related-news state in the live corpus; synthetic links are covered by PostgreSQL tests.
+- The live database has two separate `Bitcoin` finance subjects (`42d6184f…`, currently ranked, and `7e1eb498…`, historical CoinPaprika only) and no subject redirects; they were intentionally not merged.
+- The frontend redirect replace was not browser-verified against live data because the live database has no redirects; backend redirect resolution is covered by PostgreSQL tests.
+- Rank history lists only successful runs that ranked the subject; runs where it was absent are not shown as gaps.
+- The frontend has no automated test framework; it is validated by ESLint, TypeScript, the production build, and browser checks.
 
 ## 11. Next Planned Work
 
-- Phase 3.1 — Finance News & Content-Type Refactor.
-- Phase 3.2 — Subject Detail + Related News + Page Consolidation.
-- Phase 4 — Company Ranking Tracker.
+- Phase 4 — Company Ranking Tracker (next).
 - Phase 5 — Company Profiles.
 - Phase 6 — Event Integration.
 - Phase 7 — AI Intelligence.
 - Phase 8 — Product Polish.
 
-### Phase 3.2 Page Plan
+### Page Plan
 
-- Home: Top 5 Highlights and Latest News.
-- Today: source-native information and about five items per source.
-- Trending: Top 20, related news, and trend movement.
-- Search: multilingual historical retrieval.
-- Subject Detail: Related News, Sources, Rank History, and Aliases.
-- Rankings: Company Rankings.
-- Companies: Company Intelligence.
-- Long-term primary navigation: Today, Trending, Search, Rankings, Companies.
+- Implemented in Phase 3.2: Home, Today, Trending, Search, Subject Detail.
+- Rankings (Company Rankings) arrives in Phase 4 and Companies (Company Intelligence) in Phase 5; add them to primary navigation only when implemented, with no placeholder pages.
+- Long-term primary navigation: Home, Today, Trending, Search, Rankings, Companies.
 - Computer, Finance, and Gaming remain tabs or filters rather than unlimited top-level navigation.
 
 ## 12. Validation Status
 
+- Phase 3.2: `alembic current` is `20260927_06 (head)`; there is no new migration.
+- Phase 3.2 backend: pytest 113 passed (80 unit and 33 PostgreSQL integration); Ruff lint and format checks passed.
+- Phase 3.2 frontend: ESLint, TypeScript, and the Next.js production build passed.
+- Phase 3.2 live API: `/health`, `/health/db`, `/sources`, `/today`, `/trending` (with `domain`/`limit`), `/search?q=Bitcoin` (with a key source filter), `/news`, `/subjects/{id}`, and `/subjects/{id}/history` returned 200; an unknown subject returned 404 and a malformed ID 422.
+- Phase 3.2 browser: English and Simplified Chinese Home, Today, Trending, Search, and Subject Detail; Trending → Subject and Search → Subject clicks; not-found and not-currently-ranked states; the related-news empty state; locale persistence across reload; back/forward on domain tabs; and no horizontal overflow at 375px.
+- Phase 3.2 live counts were unchanged by validation: 340 subjects, 976 observations, 9 successful composite runs, 340 search documents, 105 content items, 0 content links, and 0 subject redirects.
 - Phase 3.1 migration upgrade/current passed at revision `20260927_06`.
 - Backend: 100 tests passed; Ruff lint and format checks passed.
 - Frontend: ESLint, TypeScript, and Next.js production build passed.
@@ -278,4 +307,4 @@ npm run build
 
 ## 15. Last Updated
 
-- 2026-09-27 (Australia/Sydney), after Phase 3.1 implementation and validation.
+- 2026-09-27 (Australia/Sydney), after Phase 3.2 implementation and validation.

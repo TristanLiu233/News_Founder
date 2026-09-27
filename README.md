@@ -102,9 +102,25 @@ python -m industry_intelligence.cli rank computer
 | GET | `/api/v1/sources` | Source status and latest counts |
 | GET | `/api/v1/today` | Latest source-native lists |
 | GET | `/api/v1/trending` | Latest successful composite rankings |
-| GET | `/api/v1/trending?domain=gaming` | One domain's composite ranking |
+| GET | `/api/v1/trending?domain=gaming&limit=20` | One domain's composite ranking; optional `limit` (1–100), `total` reports the full size |
+| GET | `/api/v1/subjects/{id}` | Canonical subject detail (redirect-aware) |
+| GET | `/api/v1/subjects/{id}/history?limit=30` | Composite rank history from successful runs |
 
-Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and the frontend with `npm run dev`. Today keeps original titles and metrics. Trending displays canonical/localized names, score, source count, language coverage, trend, and an expandable contribution breakdown. Source brands and raw external content are never translated. Backend machine values remain English (`gaming`, `up`, `zh-CN`).
+Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and the frontend with `npm run dev`. Source brands and raw external content are never translated. Backend machine values remain English (`gaming`, `up`, `zh-CN`).
+
+## Pages
+
+| Route | Purpose | Default size |
+| --- | --- | --- |
+| `/` | Compact dashboard: Top 5 per domain (never a cross-domain ranking) and the latest finance news | 5 per domain, 5 news |
+| `/today` | Source-native lists, one domain tab at a time; Finance shows Latest News first and Market Pulse in a collapsed secondary section | 5 per source, View More |
+| `/trending` | Cross-source composite attention per domain; Finance is labelled Market Pulse | Top 20, expandable to 50 |
+| `/search` | Multilingual canonical search; the source filter is built from `/api/v1/sources` (`searchable` keys) | 20 per page |
+| `/subject/{id}` | Subject Detail: current rank, rank history, source appearances, related news, aliases | 20 lists, 10 news per page |
+
+Header navigation is shared across pages. URLs are locale-independent; the locale stays in `localStorage`. Subject names in Trending and Search open the internal Subject Detail page; news titles and source titles open the original external URL in a new tab. Pages only read persisted data: no page load triggers ingestion, ranking, reindexing, embeddings, or LLM calls. The legacy `/?view=trending` URL redirects to `/trending`.
+
+Subject Detail resolves merged IDs through `subject_redirects` and returns the canonical subject; the page then replaces the URL with the canonical ID. The current rank comes only from the latest successful composite run for the subject's domain; a subject absent from it is shown as not currently ranked. Source appearances show the latest observation per rank list with appearance count, best rank, first-seen time and whether it is in the current snapshot. Related news reuses `/api/v1/news?subject_id=` and only shows deterministic links; an empty list is a normal state. Display names follow one shared alias rule in Search, Trending and Subject Detail.
 
 ## Validation
 

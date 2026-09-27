@@ -6,12 +6,13 @@ import math
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.db.models import RankObservation, Source, Subject, SubjectAlias
 from industry_intelligence.db.models.canonical import CompositeRankingEntry, CompositeRankingRun
 from industry_intelligence.db.models.ingestion_batch import IngestionBatch
+from industry_intelligence.services.resolution import display_names
 
 
 def freshness(age_hours, half_life_hours):
@@ -31,6 +32,16 @@ def trend_for(previous_rank, current_rank):
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def latest_successful_run(session, domain):
+    """The only composite run exposed to readers; failed/running runs are never shown."""
+    return session.scalar(
+        select(CompositeRankingRun)
+        .where(CompositeRankingRun.domain == str(domain), CompositeRankingRun.status == "success")
+        .order_by(CompositeRankingRun.calculated_at.desc())
+        .limit(1)
+    )
 
 
 def rank_domain(session, domain, settings, calculated_at=None):
@@ -61,12 +72,7 @@ def rank_domain(session, domain, settings, calculated_at=None):
     )
     if existing:
         return existing, False
-    previous = session.scalar(
-        select(CompositeRankingRun)
-        .where(CompositeRankingRun.domain == str(domain), CompositeRankingRun.status == "success")
-        .order_by(CompositeRankingRun.calculated_at.desc())
-        .limit(1)
-    )
+    previous = latest_successful_run(session, domain)
     previous_ranks = (
         {
             entry.subject_id: entry.rank
@@ -195,28 +201,39 @@ def rank_domain(session, domain, settings, calculated_at=None):
     return run, True
 
 
-def trending(session, domain=None):
+def trending(session, domain=None, limit=None):
+    from industry_intelligence.services.news import related_counts, related_preview
+
     domains = [domain] if domain else ["computer", "finance", "gaming"]
     output = []
     for value in domains:
-        run = session.scalar(
-            select(CompositeRankingRun)
-            .where(CompositeRankingRun.domain == value, CompositeRankingRun.status == "success")
-            .order_by(CompositeRankingRun.calculated_at.desc())
-            .limit(1)
-        )
+        run = latest_successful_run(session, value)
         if not run:
-            output.append({"domain": value, "status": "unavailable", "items": []})
+            output.append({"domain": value, "status": "unavailable", "total": 0, "items": []})
             continue
+        total = session.scalar(
+            select(func.count())
+            .select_from(CompositeRankingEntry)
+            .where(CompositeRankingEntry.run_id == run.id)
+        )
         entries = session.scalars(
             select(CompositeRankingEntry)
             .where(CompositeRankingEntry.run_id == run.id)
             .order_by(CompositeRankingEntry.rank)
+            .limit(limit)
         ).all()
         subject_ids = [entry.subject_id for entry in entries]
-        from industry_intelligence.services.news import related_preview
-
-        related = related_preview(session, subject_ids)
+        counts = related_counts(session, subject_ids)
+        related = related_preview(session, [sid for sid in subject_ids if counts.get(sid)])
+        aliases = defaultdict(list)
+        for alias in session.scalars(
+            select(SubjectAlias)
+            .where(SubjectAlias.subject_id.in_(subject_ids))
+            .order_by(SubjectAlias.locale, SubjectAlias.alias)
+        ):
+            aliases[alias.subject_id].append(
+                {"alias": alias.alias, "locale": alias.locale, "alias_type": alias.alias_type}
+            )
         output.append(
             {
                 "domain": value,
@@ -224,6 +241,7 @@ def trending(session, domain=None):
                 "calculated_at": run.calculated_at,
                 "ranking_run_id": run.id,
                 "diagnostics": run.diagnostics,
+                "total": total,
                 "items": [
                     {
                         "rank": entry.rank,
@@ -231,7 +249,10 @@ def trending(session, domain=None):
                         "final_score": entry.final_score,
                         "source_count": entry.source_count,
                         **entry.details,
-                        "related_news_count": len(related.get(entry.subject_id, [])),
+                        "display_names": display_names(
+                            entry.details["canonical_name"], aliases[entry.subject_id]
+                        ),
+                        "related_news_count": counts.get(entry.subject_id, 0),
                         "related_news_preview": related.get(entry.subject_id, []),
                     }
                     for entry in entries

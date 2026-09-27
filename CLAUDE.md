@@ -35,7 +35,7 @@ Tests marked `integration` (`tests/integration/`) connect to the database from t
 - `adapters/source/registry.py` → `SOURCES`: ranking and `market_pulse` lists (`SourceDefinition`, including `list_type`).
 - `adapters/source/content_registry.py` → `CONTENT_SOURCES`: chronological `news`/`feed` sources (`ContentSourceDefinition`).
 - Adapters are constructed as `Adapter(http: HTTPClient, limit)`, expose `async fetch()`, and keep a `failed_count` of skipped malformed rows. Ranking adapters return `SourceItem` (rank ≥ 1, timezone-aware, one shared `observed_at` per snapshot). Content adapters return `ContentSourceItem`, which has no rank field. Both DTOs live in `adapters/source/base.py`.
-- Adding a source means an adapter class, a registry entry, and a fixture-backed test. HTML fixtures live in `tests/fixtures/`; adapter tests inject `httpx.MockTransport` through `HTTPClient(settings, transport=...)`. The search page's `sourceOptions` list in the frontend is hard-coded and must be updated too.
+- Adding a source means an adapter class, a registry entry, and a fixture-backed test. HTML fixtures live in `tests/fixtures/`; adapter tests inject `httpx.MockTransport` through `HTTPClient(settings, transport=...)`. The Search page builds its source filter from `/api/v1/sources` (`searchable` keys), so no frontend list needs updating.
 
 **Ranking pipeline** (`services/source_ingestion.py`): `ingest()` fetches over HTTP outside any transaction, then `persist()` runs in a single transaction. It takes a per-source `pg_advisory_xact_lock`, short-circuits replays by `(source_key, batch_key)` in `IngestionBatch`, resolves each item to a canonical subject through `services/resolution.resolve_subject`, appends `RankObservation` rows, and finally calls `search_index.refresh_subject` for touched subjects. A non-empty fetch in which every item is invalid raises, so the previous snapshot is preserved.
 
@@ -47,12 +47,13 @@ Tests marked `integration` (`tests/integration/`) connect to the database from t
 
 **Transactions:** services take a SQLAlchemy `Session` and do not commit. Callers own the transaction boundary: the CLI uses `session_factory.begin()`, and API routes use `db/session.get_db_session`. `merge_subjects` also relies on the caller's transaction.
 
-**API** (`api/`): thin routers over services. `api/sources.py` serves `/sources`, `/today`, and `/trending`. `create_app(settings)` in `main.py` does not connect to the database at startup. Ingestion, ranking, relinking, and reindexing are intentionally CLI-only (`cli.py`); there are no refresh endpoints.
+**API** (`api/`): thin routers over services. `api/sources.py` serves `/sources`, `/today`, and `/trending`; `api/subjects.py` serves Subject Detail and rank history from `services/subject_detail.py`. `create_app(settings)` in `main.py` does not connect to the database at startup. Ingestion, ranking, relinking, and reindexing are intentionally CLI-only (`cli.py`); there are no refresh endpoints.
 
 **Placeholders for future phases, not active code paths:** `ai/gateway.py` (`AIGateway` protocol; Phase 3.1 uses no LLMs), `adapters/ranking/base.py` (`RankingAdapter`), and the `Company`/`RankingSnapshot` models, which are foundation work for Phase 4 company rankings and are separate from source `RankList`s.
 
 ## Frontend architecture (`frontend/`)
 
-- Both pages are client components: `app/page.tsx` (Today and Trending, switched by state and `?view=trending`) and `app/search/page.tsx` (URL-backed query state).
-- UI strings live in a per-page dictionary (`copy` in `page.tsx`, `labels` in `search/page.tsx`) keyed by `en` and `zh-CN`. Any new string needs both entries. The selected locale is stored in `localStorage` under `locale`.
+- All pages are client components: `app/page.tsx` (Home), `app/today`, `app/trending`, `app/search`, and `app/subject/[id]`. Query state (`?domain=`, search params) is read from `window.location` in effects and written with `history.pushState`, which avoids `useSearchParams` Suspense requirements during `next build`.
+- `app/layout.tsx` wraps pages in `LocaleProvider` (`lib/i18n.tsx`; `useLocale()`, locale stored in `localStorage` under `locale`) and the shared `AppHeader`. Reusable UI lives in `components/shared.tsx`.
+- UI strings live in `common` (`lib/i18n.tsx`) for shared components and in a per-page dictionary (`copy` or `labels`) keyed by `en` and `zh-CN`. Any new string needs both entries.
 - `lib/api.ts` holds hand-written TypeScript types that mirror backend response shapes, plus fetch helpers built on `NEXT_PUBLIC_API_BASE_URL`. Update these types whenever an API response changes.

@@ -8,7 +8,7 @@ import httpx
 from sqlalchemy import text
 
 from industry_intelligence.ai.embeddings import embedding_provider, validate_vector
-from industry_intelligence.services.resolution import normalize_subject_name
+from industry_intelligence.services.resolution import display_names, normalize_subject_name
 
 logger = logging.getLogger(__name__)
 
@@ -187,17 +187,7 @@ def search(
     page = ranked[offset : offset + limit]
     items = []
     for rank, row in enumerate(page, offset + 1):
-        localized = {
-            a["locale"]: a["alias"]
-            for a in row["aliases"]
-            if a["alias_type"] in {"official_name", "localized_name"}
-        }
-        # Canonical English names win over ticker-like English aliases. Chinese
-        # display still prefers the localized alias when one is indexed.
-        if locale == "en" and not any(
-            "\u3400" <= char <= "\u9fff" for char in row["canonical_name"]
-        ):
-            localized["en"] = row["canonical_name"]
+        names = display_names(row["canonical_name"], row["aliases"])
         sources = (
             session.execute(
                 text("""
@@ -222,7 +212,7 @@ def search(
             dict(
                 subject_id=str(row["subject_id"]),
                 canonical_name=row["canonical_name"],
-                display_name=localized.get(locale, row["canonical_name"]),
+                display_name=names.get(locale, row["canonical_name"]),
                 domain=row["domain"],
                 subject_type=row["subject_type"],
                 matched_on=row["matched_on"],

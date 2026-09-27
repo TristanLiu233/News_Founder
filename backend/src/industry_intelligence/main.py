@@ -13,6 +13,7 @@ from industry_intelligence.api.health import router as health_router
 from industry_intelligence.api.news import router as news_router
 from industry_intelligence.api.search import router as search_router
 from industry_intelligence.api.sources import router as sources_router
+from industry_intelligence.api.subjects import router as subjects_router
 from industry_intelligence.config import Settings, get_settings
 from industry_intelligence.db.session import create_database_engine, create_session_factory
 from industry_intelligence.logging import configure_logging
@@ -54,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(news_router)
     app.include_router(health_router)
     app.include_router(sources_router)
+    app.include_router(subjects_router)
 
     @app.exception_handler(Exception)
     async def internal_error_handler(_: Request, exc: Exception) -> JSONResponse:

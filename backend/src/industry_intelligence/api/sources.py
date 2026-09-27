@@ -26,5 +26,6 @@ def get_today(session: Annotated[Session, Depends(get_db_session)]):
 def get_trending(
     session: Annotated[Session, Depends(get_db_session)],
     domain: str | None = Query(default=None, pattern="^(computer|finance|gaming)$"),
+    limit: int | None = Query(default=None, ge=1, le=100),
 ):
-    return trending(session, domain)
+    return trending(session, domain, limit)

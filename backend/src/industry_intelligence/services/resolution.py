@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select, text, update
 
-from industry_intelligence.db.models import RankObservation, Subject
+from industry_intelligence.db.models import ContentSubjectLink, RankObservation, Subject
 from industry_intelligence.db.models.canonical import SubjectAlias, SubjectExternalIdentity
 from industry_intelligence.db.models.search import SubjectRedirect
 
@@ -53,6 +53,26 @@ def normalize_url(value):
 
 def locale_for(value):
     return "zh-CN" if re.search(r"[\u3400-\u9fff]", value) else "en"
+
+
+DISPLAY_ALIAS_TYPES = {"official_name", "localized_name"}
+DISPLAY_LOCALES = ("en", "zh-CN")
+
+
+def display_names(canonical_name, aliases):
+    """Per-locale display names shared by Search, Trending and Subject Detail.
+
+    ``aliases`` are dicts ordered by (locale, alias). Localized/official aliases win,
+    except that a non-Chinese canonical name beats ticker-like English aliases.
+    """
+    names = {
+        alias["locale"]: alias["alias"]
+        for alias in aliases
+        if alias["alias_type"] in DISPLAY_ALIAS_TYPES
+    }
+    if locale_for(canonical_name) == "en":
+        names["en"] = canonical_name
+    return {locale: names.get(locale, canonical_name) for locale in DISPLAY_LOCALES}
 
 
 def seeded_canonical(value):
@@ -270,6 +290,19 @@ def merge_subjects(session, canonical_id, duplicate_id):
         .where(SubjectExternalIdentity.subject_id == duplicate_id)
         .values(subject_id=canonical_id)
     )
+    for link in session.scalars(
+        select(ContentSubjectLink).where(ContentSubjectLink.subject_id == duplicate_id)
+    ).all():
+        exists = session.scalar(
+            select(ContentSubjectLink.id).where(
+                ContentSubjectLink.subject_id == canonical_id,
+                ContentSubjectLink.content_item_id == link.content_item_id,
+            )
+        )
+        if exists:
+            session.delete(link)
+        else:
+            link.subject_id = canonical_id
     session.execute(
         text("UPDATE subject_redirects SET canonical_id=:canonical WHERE canonical_id=:duplicate"),
         {"canonical": canonical_id, "duplicate": duplicate_id},

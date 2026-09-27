@@ -51,6 +51,19 @@ def list_news(
     return [serialize_content(row, subjects.get(row[0].id, ())) for row in rows]
 
 
+def related_counts(session, subject_ids):
+    """Linked content-item counts per subject, in one grouped query."""
+    if not subject_ids:
+        return {}
+    return dict(
+        session.execute(
+            select(ContentSubjectLink.subject_id, func.count(ContentSubjectLink.content_item_id))
+            .where(ContentSubjectLink.subject_id.in_(subject_ids))
+            .group_by(ContentSubjectLink.subject_id)
+        ).all()
+    )
+
+
 def related_preview(session, subject_ids, limit=3):
     return {
         subject_id: list_news(session, subject_id=subject_id, limit=limit)
