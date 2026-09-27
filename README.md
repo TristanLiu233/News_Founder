@@ -1,6 +1,6 @@
 # Industry Intelligence & Ranking Platform
 
-The platform collects twelve public rankings plus four finance news/feed sources. It preserves source-native history, resolves ranked entries to auditable canonical subjects, and keeps chronological news separate from market rankings. The UI supports English and 简体中文; the selected locale is stored in browser `localStorage`.
+The platform collects twelve public rankings plus four finance news/feed sources. It preserves source-native history, resolves ranked entries to auditable canonical subjects, and keeps chronological news separate from market rankings. Phase 4 adds an External Company Ranking Tracker that stores publisher company rankings as immutable snapshots with conservative company identity. The UI supports English and 简体中文; the selected locale is stored in browser `localStorage`.
 
 ## Sources
 
@@ -117,6 +117,7 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 | `/trending` | Cross-source composite attention per domain; Finance is labelled Market Pulse | Top 20, expandable to 50 |
 | `/search` | Multilingual canonical search; the source filter is built from `/api/v1/sources` (`searchable` keys) | 20 per page |
 | `/subject/{id}` | Subject Detail: current rank, rank history, source appearances, related news, aliases | 20 lists, 10 news per page |
+| `/rankings` | External company rankings per domain: ranking selector, latest snapshot table with movement, dropped entries, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
 
 Header navigation is shared across pages. URLs are locale-independent; the locale stays in `localStorage`. Subject names in Trending and Search open the internal Subject Detail page; news titles and source titles open the original external URL in a new tab. Pages only read persisted data: no page load triggers ingestion, ranking, reindexing, embeddings, or LLM calls. The legacy `/?view=trending` URL redirects to `/trending`.
 
@@ -266,3 +267,78 @@ python -m industry_intelligence.cli search-reindex
 ```
 
 Live validation on 2026-09-27 persisted 105 content items: CNBC 30, Nasdaq 15, 东方财富 30, and 新浪财经 30. Repeating ingestion persisted zero duplicate CNBC/Nasdaq records. The database contained 340 search documents and 976 historical rank observations. All 100 backend tests passed; Ruff lint/format, frontend ESLint, TypeScript, and the Next.js production build passed.
+
+## Phase 4 — External Company Ranking Tracker
+
+External Rankings are not our opinion. The tracker stores company rankings exactly as external publishers publish them and follows their history. It never computes a platform company score, never combines incompatible metrics (market cap, revenue, total assets), and is separate from Today (source-native lists), Trending (cross-source attention RRF) and Search (query relevance).
+
+```text
+External ranking publisher
+        ↓
+CompanyRankingAdapter → CompanyRankingSnapshot (entries: rank, raw name, raw value, identities)
+        ↓
+Company resolution (identity → seeded identity pair → unique exact name → new company)
+        ↓
+Ranking (definition) → RankingSnapshot (immutable, idempotent) → RankingEntry
+        ↓
+previous rank / rank change / new / dropped, computed from the preceding snapshot
+        ↓
+GET /api/v1/company-rankings… → /rankings (English / 简体中文)
+```
+
+| Domain | Publisher | Ranking | Metric | Acquisition | Stored | Live verified |
+| --- | --- | --- | --- | --- | --- | --- |
+| Computer | CompaniesMarketCap | Largest tech companies by market cap | Market cap (USD) | Public CSV download (`?download=csv`) | Top 100 of the full list | Yes |
+| Finance | CompaniesMarketCap | Largest banks and bank holding companies by market cap | Market cap (USD) | Public CSV download | Top 100 | Yes |
+| Finance | Wikipedia | List of largest banks — By total assets | Total assets (US$ bn) | Wikimedia REST API (current page HTML) | Full table (100) | **No** — HTTP 403 (see below) |
+| Gaming | CompaniesMarketCap | Largest video game companies by market cap | Market cap (USD) | Public CSV download | Top 100 | Yes |
+| Gaming | Wikipedia | List of largest video game companies by revenue | Revenue (US$ bn) | Wikimedia REST API (current page HTML) | Full table (50) | **No** — HTTP 403 (see below) |
+
+companiesmarketcap.com offers each category as a CSV download and its robots.txt does not restrict those paths; the list is updated daily, so the UTC day is the snapshot identity. Wikipedia rankings read only the current page from `/api/rest_v1/page/html/{title}`, the endpoint Wikimedia's Robot policy recommends for page HTML (the Action API is not used). The revision that page reports is the snapshot identity, its modification time is `published_at`, and `source_url` is a human-readable permanent link to that revision. The project never requests historical revisions from Wikimedia: ranking history accumulates only from its own repeated runs (day 1, day 2, day 3, …). The Wikipedia adapters are implemented and fixture-tested but not live verified (see *Wikimedia source contact*). Registered rankings without a snapshot still appear in the Rankings page with an explicit empty state.
+
+### Wikimedia source contact
+
+The Wikipedia ranking adapters use the Wikimedia API. Wikimedia requires
+automated clients to provide contact information in the User-Agent.
+
+Configure the repository-root `.env` before running Wikipedia ingestion:
+
+```env
+SOURCE_CONTACT=your-email@example.com
+```
+
+Replace the placeholder with an email address or other valid contact
+information controlled by the deployment owner.
+Do not commit personal contact information to the repository.
+
+- Replace `SOURCE_CONTACT` with contact information belonging to the actual deployment maintainer. Do not reuse another developer's private email when deploying your own instance. Every clone or deployment must set its own maintainer contact.
+- `.env` is gitignored and must never be committed; `.env.example` only carries the placeholder.
+- The contact is sent only on Wikipedia requests, never to the other sources.
+- If `SOURCE_CONTACT` is unset, blank, or a documentation placeholder (`example.com`, `.invalid`, `.test`), Wikipedia ingestion stops with a `SourceContactRequired` configuration error before any request. The project never fakes a browser User-Agent or works around Wikimedia's access policy.
+
+Current status: Wikimedia requests remain HTTP 403 from the current application client after SOURCE_CONTACT configuration and policy-compliant endpoint changes. The two Wikipedia rankings are therefore implemented and fixture-tested but NOT live verified. The request was made once per ranking, serially; after the 403 no further attempts were made. The project does not switch HTTP clients, run external command-line fetchers, imitate a browser User-Agent, or otherwise work around Wikimedia's access controls, and OAuth is not integrated. Wikimedia's [Robot policy](https://wikitech.wikimedia.org/wiki/Robot_policy) describes authenticated requests (an OAuth 2.0 access token) and published source CIDRs as stronger forms of client identification; adopting either is a future owner decision.
+
+Candidates rejected during the source audit: Newzoo Top 25 (HTTP 403 Cloudflare challenge), Forbes Global 2000 (only an undocumented internal JSON endpoint, and a cross-industry list), Fortune Global 500 (cross-industry list, terms unclear), Brand Finance Brandirectory (JavaScript-only application), Motley Fool largest companies (cross-industry), and Wikipedia's largest technology companies by revenue (its current table has no explicit rank column).
+
+Company identity is intentionally minimal (Phase 5 builds profiles) and independent of `Subject`. Resolution uses, in order: an exact external identity (a CompaniesMarketCap symbol or a Wikipedia article title including any section fragment), a reviewed identity-to-identity seed pair (for example `1398.HK` ↔ *Industrial and Commercial Bank of China*), a unique exact normalized name or alias, and otherwise a new company. A name match is rejected when several companies share the name or when the candidate holds a different ticker symbol. Wikipedia links are not treated as exclusive because editors retarget them. There is no fuzzy matching, so a false negative is preferred to a false merge.
+
+Snapshots are append-only. Re-ingesting the same `snapshot_key` is a replay. A new key whose entries hash to the same content as its neighbour in history is recorded as unchanged instead of duplicated. Movement is `rank_change = previous_rank − current_rank` against the immediately preceding snapshot of the same ranking (ordered by `effective_at`): a company absent before is **New**, one absent now is listed as dropped, and the first snapshot shows no movement.
+
+```bash
+python -m industry_intelligence.cli company-ranking-ingest cmc_tech_market_cap
+python -m industry_intelligence.cli company-ranking-ingest wikipedia_video_game_revenue
+python -m industry_intelligence.cli company-ranking-ingest-all
+```
+
+`company-ranking-ingest-all` isolates failures per ranking, reports them, and exits non-zero if any ranking failed. Ingestion always reads the current published version; there is no historical-revision option. Run it periodically (for example daily) to build history.
+
+Offline fixture verification is not production live ingestion. Parser, movement, and history behaviour are covered by fixtures and by PostgreSQL tests; the REST-shaped Wikipedia fixture is derived from the table captured during the source audit and is labelled as such.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/v1/company-rankings?domain=&source=&limit=&offset=` | Ranking definitions with their latest snapshot summary (registered rankings without data report `no_snapshot`) |
+| GET | `/api/v1/company-rankings/{key-or-id}?snapshot_id=&limit=&offset=` | One snapshot (latest by default) with entries, previous rank, rank change, movement and dropped entries |
+| GET | `/api/v1/company-rankings/{key-or-id}/history?limit=&offset=` | Snapshot timeline, newest first, with the #1 entry |
+| GET | `/api/v1/companies/{id}/rankings?limit=` | A company's appearances across external rankings, including dropped points |
+
+Page loads only read PostgreSQL. They never fetch external sites, ingest, or call AI.

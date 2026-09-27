@@ -5,6 +5,7 @@ import asyncio
 import json
 from uuid import UUID
 
+from industry_intelligence.adapters.company_ranking.registry import COMPANY_RANKINGS
 from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.config import get_settings
@@ -34,6 +35,10 @@ def main():
     reindex_parser = sub.add_parser("search-reindex")
     reindex_parser.add_argument("--subject-id", type=UUID)
     sub.add_parser("search-embed")
+    company = sub.add_parser("company-ranking-ingest")
+    # Current published versions only: no option requests historical source revisions.
+    company.add_argument("ranking", choices=COMPANY_RANKINGS)
+    sub.add_parser("company-ranking-ingest-all")
     args = parser.parse_args()
     settings = get_settings()
     configure_logging(settings)
@@ -71,6 +76,17 @@ def main():
 
             with factory.begin() as session:
                 result = relink_all_content(session)
+        elif args.command in {"company-ranking-ingest", "company-ranking-ingest-all"}:
+            from industry_intelligence.services.company_ranking_ingestion import (
+                ingest_all_company_rankings,
+                ingest_company_ranking,
+            )
+
+            result = asyncio.run(
+                ingest_company_ranking(args.ranking, settings, factory)
+                if args.command == "company-ranking-ingest"
+                else ingest_all_company_rankings(settings, factory)
+            )
         elif args.command in {"ingest-content", "ingest-content-all"}:
             from industry_intelligence.services.content_ingestion import (
                 ingest_all_content,

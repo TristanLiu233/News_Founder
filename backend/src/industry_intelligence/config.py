@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,6 +42,9 @@ class Settings(BaseSettings):
 
     source_fetch_limit: int = Field(default=30, ge=1, le=100)
     source_http_timeout: float = Field(default=20, gt=0, le=120)
+    # Contact (URL or email) of the deployment maintainer, sent in the User-Agent only to
+    # publishers whose policy requires it (Wikimedia). Never commit a real value.
+    source_contact: str | None = Field(default=None, repr=False)
 
     app_name: str = "Industry Intelligence & Ranking Platform"
     environment: str = "development"
@@ -55,6 +59,19 @@ class Settings(BaseSettings):
             msg = "DATABASE_URL must use a PostgreSQL SQLAlchemy URL"
             raise ValueError(msg)
         return value
+
+    @field_validator("source_contact")
+    @classmethod
+    def placeholder_contact_is_unset(cls, value: str | None) -> str | None:
+        """Blank values and documentation placeholders count as not configured."""
+
+        value = (value or "").strip()
+        host = urlsplit(value).hostname if "://" in value else value.rsplit("@", 1)[-1]
+        domain = (host or "").lower()
+        placeholder = domain in {"example.com", "example.org", "example.net"} or domain.endswith(
+            (".example", ".invalid", ".test")
+        )
+        return None if not value or placeholder else value
 
     @field_validator("log_level")
     @classmethod

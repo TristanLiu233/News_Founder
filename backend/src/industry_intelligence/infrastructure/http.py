@@ -7,11 +7,19 @@ import httpx
 from industry_intelligence.config import Settings
 
 
+def user_agent(contact: str | None = None) -> str:
+    """Honest client identification; a contact is appended only when a caller passes one."""
+
+    details = "personal research MVP" + (f"; {contact}" if contact else "")
+    return f"IndustryIntelligence/0.1 ({details})"
+
+
 class HTTPClient:
-    def __init__(self, settings: Settings, transport=None):
+    def __init__(self, settings: Settings, transport=None, contact: str | None = None):
+        # The contact is opt-in per client so it only reaches publishers whose policy asks for it.
         self.client = httpx.AsyncClient(
             timeout=settings.source_http_timeout,
-            headers={"User-Agent": "IndustryIntelligence/0.1 (personal research MVP)"},
+            headers={"User-Agent": user_agent(contact)},
             follow_redirects=True,
             transport=transport,
         )

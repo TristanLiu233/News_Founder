@@ -22,6 +22,10 @@
 - One content item may relate to multiple canonical subjects.
 - Search returns one canonical subject once; related content supplies context rather than becoming a duplicate subject.
 - Composite Ranking measures cross-platform attention, not quality, investment merit, or prediction.
+- External Company Rankings are publisher rankings shown as published: External Rankings != Our Opinion.
+- Today != Trending != Search != Company Rankings. Trending RRF and Search relevance are never used as company rankings, and company rankings never feed Trending or Search.
+- A `Company` (Phase 4) is a minimal cross-domain identity for external company rankings; it is separate from `Subject` and is not a profile.
+- Different company rankings (market cap, revenue, total assets) are never combined into a platform company score.
 
 ## 3. Architecture & Tech Stack
 
@@ -39,6 +43,7 @@
 - Search RRF and Trending RRF are separate scoring contexts.
 - Phase 3.1 adds general content ingestion, `ContentItem`, and content-to-subject links.
 - Phase 3.2 adds a read-only Subject Detail model (`services/subject_detail.py`) and a shared Next.js layout with routes `/`, `/today`, `/trending`, `/search`, and `/subject/[id]`.
+- Phase 4 adds the External Company Ranking Tracker: `adapters/company_ranking/` (protocol, CompaniesMarketCap CSV and Wikipedia REST adapters, explicit `COMPANY_RANKINGS` registry), `services/company_resolution.py`, `services/company_ranking_ingestion.py`, `services/company_rankings.py`, `api/company_rankings.py`, and the `/rankings` page.
 
 ## 4. Permanent Design Rules
 
@@ -77,6 +82,11 @@
 - English and Simplified Chinese UI must remain available.
 - Locale persistence must remain functional.
 - Source failures must remain isolated during bulk ingestion.
+- Company ranking snapshots are immutable and idempotent: a repeated `snapshot_key` is a replay and identical neighbouring content is not duplicated; history is never rewritten to simulate a latest list.
+- Store the publisher's real Top N (or a documented tracked prefix); never pad or fabricate positions, metrics, or identity matches.
+- Company resolution is conservative: exact identity, reviewed identity-to-identity seed pairs, unique exact name; no fuzzy matching. Only ticker symbols are exclusive identities.
+- Honour publisher API policies (for example Wikimedia's User-Agent contact requirement) through configuration; never fake a browser User-Agent, switch or imitate HTTP clients to pass bot detection, or bypass a policy. Personal contact details stay in the local `.env` and are never committed; each deployment uses its own maintainer contact.
+- `SOURCE_CONTACT` is sent only by HTTP clients that opt in (`HTTPClient(..., contact=...)`, used for rankings with `requires_contact`); blank and `example.com`/`.invalid`/`.test` placeholders count as unset.
 
 ## 5. Current Data Sources
 
@@ -112,6 +122,17 @@
 - 游民星空 — 近期热游榜 — public HTML — Simplified Chinese.
 - 3DM — 网络游戏排行榜 — public HTML — Simplified Chinese.
 
+### External Company Rankings (Phase 4)
+
+- CompaniesMarketCap — Largest tech companies by market cap — computer — public CSV download — English — live verified (Top 100 of 1,129).
+- CompaniesMarketCap — Largest banks and bank holding companies by market cap — finance — public CSV download — English — live verified (Top 100 of 719).
+- CompaniesMarketCap — Largest video game companies by market cap — gaming — public CSV download — English — live verified (Top 100 of 231).
+- Wikipedia — List of largest banks (by total assets) — finance — Wikimedia REST API current page HTML — English — implemented and fixture-tested, NOT live verified (HTTP 403).
+- Wikipedia — List of largest video game companies by revenue — gaming — Wikimedia REST API current page HTML — English — implemented and fixture-tested, NOT live verified (HTTP 403).
+- Rejected: Newzoo (403 Cloudflare challenge), Forbes Global 2000 (undocumented internal JSON; cross-industry), Fortune Global 500 (cross-industry; terms unclear), Brand Finance (JavaScript-only app), Motley Fool (cross-industry), Wikipedia largest technology companies by revenue (no explicit rank column).
+- Wikipedia first answered 403 without a User-Agent contact. The owner then configured `SOURCE_CONTACT` locally (value only in the gitignored `.env`), and the adapter was refactored to Wikimedia's policy-recommended current-page REST endpoint. Wikimedia requests remain HTTP 403 from the current application client after SOURCE_CONTACT configuration and policy-compliant endpoint changes. One request per ranking was made, serially; no further attempts, alternative clients, command-line fetchers, browser User-Agents, or OAuth were used. The cause of the 403 is not established by the project's evidence and must not be documented as a specific blocking mechanism.
+- Wikimedia's Robot policy (https://wikitech.wikimedia.org/wiki/Robot_policy) prefers `/api/rest_v1/page/html/{title}` or `/wiki/` pages over the Action API for page HTML, discourages requests for non-current revisions, and describes authentication (OAuth 2.0) or published source CIDRs as stronger client identification. The adapter now follows the first two; authentication is a future owner decision.
+
 ### Historical Substitutions
 
 - 36氪 returned a security-check interstitial and was replaced by 虎嗅.
@@ -135,6 +156,12 @@
 - `ContentItem`: source-neutral news/feed history, stable source identity, URL, publication/observation timestamps, language, excerpt, metadata, and content hash.
 - `ContentSubjectLink`: many-to-many deterministic related-news links with strategy and confidence.
 - `RankList.list_type`: `ranking` or `market_pulse`; general content uses `news` or `feed`.
+- `Company`: minimal cross-domain identity (`canonical_name`, `normalized_name`; `canonical_name` is not unique). The Phase 0 `domain` column was removed because a company can appear in several domains.
+- `CompanyAlias`: published names with provenance (`alias_source` = ranking key).
+- `CompanyIdentity`: unique `(scheme, value)` such as `companiesmarketcap:symbol` or `wikipedia:en` (article title, section fragment kept).
+- `Ranking`: one external ranking definition with a stable `key`, `source_key`, domain, publisher, source-provided name, metric type/label/unit, frequency, acquisition, language, and source URL.
+- `RankingSnapshot`: one immutable observation, unique `(ranking_id, snapshot_key)`, with `observed_at`, optional `published_at`, `effective_at` (history order), source URL, content hash, status, stored and source entry counts, and metadata. The Phase 0 per-company placeholder table was rebuilt.
+- `RankingEntry`: company position in a snapshot with rank, raw name, raw value, optional parsed metric value, resolution strategy, and metadata; unique `(snapshot_id, company_id)`.
 
 ## 7. Completed Phases
 
@@ -146,16 +173,15 @@
 - Live semantic-provider verification is not completed because no live multilingual provider is configured.
 - NVIDIA/英伟达 and Black Myth/黑神话 are verified by deterministic PostgreSQL tests, not observed in the current live corpus.
 - Phase 3.1 — Finance News & Content-Type Refactor: completed.
-- Phase 3.2 — Subject Detail, Related News & Page Consolidation: completed.
+- Phase 3.2 — Subject Detail, Related News & Page Consolidation: completed (committed on branch `phase-3.2`).
 
 ## 8. Current Phase
 
-- Phase 3.2 — Subject Detail, Related News & Page Consolidation: completed on branch `phase-3.2`, pending user review (not merged, not tagged).
-- Split the former combined root page into Home, Today, and Trending routes with shared header navigation and a shared locale provider.
-- Added Subject Detail (`/subject/[id]`) backed by `GET /api/v1/subjects/{id}` and `GET /api/v1/subjects/{id}/history`, with related news reused from `GET /api/v1/news?subject_id=`.
-- Trending and Search subject names link to Subject Detail.
-- The Search source filter is built dynamically from `/api/v1/sources`.
-- No data sources, AI features, or schema changes were added.
+- Phase 4 — Company Ranking Tracker: implemented on branch `phase-4` (branched from committed `phase-3.2`), pending user review; not committed, not merged, not tagged.
+- Replaced the unused Phase 0 `Company`/`Ranking`/`RankingSnapshot`/`RankingAdapter` placeholders through migration `20260927_07` (the upgrade refuses to run if placeholder rows exist).
+- Added three live CompaniesMarketCap rankings and two Wikipedia rankings that are implemented and fixture-tested but NOT live verified (HTTP 403 after `SOURCE_CONTACT` configuration and the REST endpoint change).
+- Added `/rankings` to primary navigation (Home, Today, Trending, Search, Rankings) with domain tabs, ranking selector, snapshot table, movement, dropped entries, on-demand history, and per-company "other rankings".
+- No company profiles, AI features, scores, or cross-ranking aggregation were added.
 
 ## 9. Current Implementation Status
 
@@ -164,8 +190,20 @@
 - English/Simplified Chinese UI exists for Home (`/`), Today (`/today`), Trending (`/trending`), Search (`/search`), and Subject Detail (`/subject/[id]`).
 - Search indexing refreshes incrementally after ranking ingestion.
 - Existing Finance rankings are preserved and explicitly classified as `market_pulse`.
-- Migration head is `20260927_06`; it adds content tables and rank-list semantics. Phase 3.2 required no schema migration.
+- Migration `20260927_06` added content tables and rank-list semantics; Phase 3.2 required no schema migration.
 - ContentItem, ContentSubjectLink, News API, Finance News UI, Trending previews, and Search context are implemented.
+- Migration head is now `20260927_07` (Phase 4 company rankings).
+
+### Company Ranking Tracker (Phase 4)
+
+- Adapters are constructed as `Adapter(http, definition)`, return one `CompanyRankingSnapshot` of the current published version, and count malformed rows in `failed_count`. There is no historical-revision option in adapters, services, or the CLI; history comes only from this project's periodic snapshots.
+- `persist_company_snapshot` (caller's transaction) takes a global `company_rankings` advisory lock, upserts the ranking definition by key, replays an existing `snapshot_key`, skips content identical to its neighbour, resolves companies, and writes the snapshot once with final counts (never updated). A snapshot with no valid entries raises and preserves history.
+- Snapshot keys: CompaniesMarketCap `daily:YYYY-MM-DD` (UTC); Wikipedia `revision:<revid>` read from the current REST page (`<html about=…/Special:Redirect/revision/N>`, ETag fallback), with `dc:modified` as `published_at`. Re-reading an unchanged current page is a replay.
+- Resolution strategies recorded per entry: `external_identity`, `seed_identity`, `exact_name`, `new_company`.
+- Seed identity pairs (reviewed 2026-09-27): 1398.HK/ICBC, SAN/Banco Santander, TD/Toronto-Dominion Bank, MUFG/MUFG, 3968.HK/China Merchants Bank, ING/ING Group, SMFG/SMBC Group, RBLX/Roblox Corporation, 036570.KS/NCSoft.
+- `/company-rankings` merges persisted rankings with registered-but-unobserved ones (`id: null`, `status: no_snapshot`). Rankings are addressed by key or UUID.
+- `/rankings` URL state: `?domain=&ranking=&snapshot=`; a ranking from another domain corrects the domain with `replaceState`. Company names are plain text (no company page before Phase 5).
+- Live data (2026-09-27): 294 companies, 294 aliases, 294 identities, 3 rankings with snapshots (5 registered), 3 snapshots, 300 entries; 6 companies (Microsoft, Tencent, Sony, NetEase, Nintendo, Sea Limited) appear in two rankings via their symbol.
 
 ### Page architecture (Phase 3.2)
 
@@ -201,11 +239,17 @@
 - The frontend redirect replace was not browser-verified against live data because the live database has no redirects; backend redirect resolution is covered by PostgreSQL tests.
 - Rank history lists only successful runs that ranked the subject; runs where it was absent are not shown as gaps.
 - The frontend has no automated test framework; it is validated by ESLint, TypeScript, the production build, and browser checks.
+- Wikipedia company rankings are not live verified. Wikimedia requests remain HTTP 403 from the current application client after SOURCE_CONTACT configuration and policy-compliant endpoint changes. `SOURCE_CONTACT` stays configured locally and is sent only on Wikimedia requests. Enabling them later is an owner decision (for example Wikimedia OAuth 2.0 authentication).
+- Each live company ranking has one snapshot (2026-09-27), so live movement is not yet observable; movement, New, dropped, and history switching were verified by PostgreSQL tests and in a disposable preview database loaded offline with two Wikipedia revisions captured during the source audit (deleted afterwards). That was offline fixture verification, not production live ingestion.
+- CompaniesMarketCap snapshots store a Top 100 prefix of the full category list, so New/dropped at the boundary means entering or leaving the tracked Top 100.
+- A Wikipedia row that links to a parent company's article gives that parent's article as the identity (for example "NetEase Games" once linked to "NetEase"); section fragments are kept, but such rows can share an article identity with a later parent row.
+- Company display names are the publishers' English names; no localized company aliases exist yet.
+- Only one CompaniesMarketCap snapshot per UTC day is kept; intra-day re-runs are replays.
 
 ## 11. Next Planned Work
 
-- Phase 4 — Company Ranking Tracker (next).
-- Phase 5 — Company Profiles.
+- Phase 4 — Company Ranking Tracker (implemented, pending review).
+- Phase 5 — Company Profiles (next; do not start before Phase 4 review).
 - Phase 6 — Event Integration.
 - Phase 7 — AI Intelligence.
 - Phase 8 — Product Polish.
@@ -213,12 +257,21 @@
 ### Page Plan
 
 - Implemented in Phase 3.2: Home, Today, Trending, Search, Subject Detail.
-- Rankings (Company Rankings) arrives in Phase 4 and Companies (Company Intelligence) in Phase 5; add them to primary navigation only when implemented, with no placeholder pages.
+- Implemented in Phase 4: Rankings (`/rankings`, in primary navigation).
+- Companies (Company Intelligence) arrives in Phase 5; add it to primary navigation only when implemented, with no placeholder pages.
 - Long-term primary navigation: Home, Today, Trending, Search, Rankings, Companies.
 - Computer, Finance, and Gaming remain tabs or filters rather than unlimited top-level navigation.
 
 ## 12. Validation Status
 
+- Phase 4: `alembic current` is `20260927_07 (head)`; upgrade → downgrade → upgrade round trip passed on the dev database, and a fresh empty database migrated through all seven revisions.
+- Phase 4 baseline before changes: pytest 113 passed (80 unit, 33 integration); Ruff, ESLint, TypeScript, and build passed.
+- Phase 4 backend (after the Wikimedia compliance refactor): pytest 167 passed (119 unit, 48 PostgreSQL integration); Ruff lint and format checks passed. Integration tests left live counts unchanged. Tests cover: no Action API HTML ingestion, no historical-revision option, `SOURCE_CONTACT` sent only to Wikimedia, placeholder contacts treated as unset, REST fixture parsing, and current-page snapshot idempotency.
+- Phase 4 frontend: ESLint, TypeScript, and the Next.js production build (including `/rankings`) passed.
+- Phase 4 live: three CompaniesMarketCap rankings fetched, parsed, persisted, and read through the API; same-day re-ingestion replayed with zero new rows; `company-ranking-ingest-all` isolated the two Wikipedia failures and exited 1 (first `SourceContactRequired`; after configuring `SOURCE_CONTACT` locally, HTTP 403). After the REST current-page refactor, one serial request per Wikipedia ranking still returned HTTP 403; no further attempts were made.
+- Phase 4 live API: `/company-rankings` (with domain, limit/offset), `/company-rankings/{key}`, `/history`, and `/companies/{id}/rankings` returned 200; unknown ranking or snapshot 404; malformed reference 422; existing Phase 3.2 endpoints still 200.
+- Phase 4 browser: English and Simplified Chinese Rankings; Computer, Finance, and Gaming tabs; ranking switching including the no-snapshot state; Show all; history; "other rankings"; external source links; unknown ranking and snapshot not-found; cross-domain link correction; refresh and back/forward; 375px, 768px, and desktop without horizontal overflow; Home, Today, Trending → Subject, and Search → Subject regression; no console errors in a fresh tab. Movement and historical snapshot rendering were checked against the disposable preview database, not live data.
+- Phase 4 live counts for earlier phases were unchanged: 340 subjects, 976 observations, 9 composite runs, 340 search documents, 105 content items, 0 content links, 0 redirects.
 - Phase 3.2: `alembic current` is `20260927_06 (head)`; there is no new migration.
 - Phase 3.2 backend: pytest 113 passed (80 unit and 33 PostgreSQL integration); Ruff lint and format checks passed.
 - Phase 3.2 frontend: ESLint, TypeScript, and the Next.js production build passed.
@@ -271,6 +324,9 @@ npm run build
 - Single-domain ranking: `python -m industry_intelligence.cli rank DOMAIN`.
 - Targeted search refresh: `python -m industry_intelligence.cli search-reindex --subject-id UUID`.
 - Optional embeddings: `python -m industry_intelligence.cli search-embed`.
+- Single company ranking: `python -m industry_intelligence.cli company-ranking-ingest RANKING_KEY` (current published version only).
+- All company rankings: `python -m industry_intelligence.cli company-ranking-ingest-all`.
+- Wikipedia rankings require `SOURCE_CONTACT` (the deployment maintainer's own URL or email) in the local `.env`; they are currently still blocked by Wikimedia (see Known Issues).
 
 ## 14. AI Agent Instructions
 
@@ -307,4 +363,4 @@ npm run build
 
 ## 15. Last Updated
 
-- 2026-09-27 (Australia/Sydney), after Phase 3.2 implementation and validation.
+- 2026-09-27 (Australia/Sydney), after Phase 4 implementation and validation.

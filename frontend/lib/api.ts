@@ -138,6 +138,57 @@ export interface SubjectHistory {
   limit: number; total: number; items: RankHistoryPoint[];
 }
 
+/** External company rankings (Phase 4): publisher rankings shown as published, never a platform score. */
+export type CompanyMovement = "up" | "down" | "unchanged" | "new";
+export interface CompanyRankingDefinition {
+  /** Null while a registered ranking has never been ingested. */
+  id: string | null; key: string; name: string; publisher: string; source_key: string; domain: Domain;
+  methodology: string | null; metric_type: string; metric_label: string; metric_unit: string | null;
+  frequency: string; acquisition: string; primary_language: string; source_url: string | null;
+}
+export interface CompanyRankingSnapshotInfo {
+  id: string; snapshot_key: string; observed_at: string; published_at: string | null; effective_at: string;
+  source_url: string; status: "complete" | "partial"; entry_count: number; source_entry_count: number | null;
+  metadata: {basis?: string; metric_header?: string; stored_limit?: number; revision_id?: number; [key: string]: unknown};
+}
+export interface CompanyRankingSummary extends CompanyRankingDefinition {
+  status: "ready" | "no_snapshot"; snapshot_count: number; latest_snapshot: CompanyRankingSnapshotInfo | null;
+}
+export interface CompanyRankingsPage {
+  items: CompanyRankingSummary[]; total: number; limit: number; offset: number;
+}
+export interface CompanyRankingEntry {
+  company_id: string; canonical_name: string; display_name: string; rank: number;
+  previous_rank: number | null; rank_change: number | null;
+  /** Null for the first tracked snapshot, where no movement can be known. */
+  movement: CompanyMovement | null; is_new: boolean;
+  raw_value: string | null; metric_value: number | null; metadata: Record<string, unknown>;
+}
+export interface CompanyRankingDetail {
+  ranking: CompanyRankingDefinition; status: "ready" | "no_snapshot"; snapshot_count: number;
+  snapshot: CompanyRankingSnapshotInfo | null; previous_snapshot: CompanyRankingSnapshotInfo | null;
+  entries: CompanyRankingEntry[]; total: number; limit: number; offset: number;
+  dropped: {company_id: string; display_name: string; previous_rank: number}[]; dropped_count: number;
+}
+export interface CompanyRankingHistoryItem extends CompanyRankingSnapshotInfo {
+  leader: {company_id: string; name: string} | null;
+}
+export interface CompanyRankingHistory {
+  ranking: CompanyRankingDefinition; items: CompanyRankingHistoryItem[];
+  total: number; limit: number; offset: number;
+}
+export interface CompanyRankingPoint {
+  snapshot_id: string; effective_at: string; observed_at: string; rank: number | null;
+  previous_rank: number | null; rank_change: number | null;
+  movement: CompanyMovement | "dropped" | null; raw_value: string | null;
+}
+export interface CompanyRankingAppearances {
+  company_id: string; canonical_name: string;
+  aliases: {alias: string; alias_type: string; alias_source: string}[];
+  identities: {scheme: string; value: string; source_key: string}[];
+  rankings: {ranking: CompanyRankingDefinition; in_latest_snapshot: boolean; latest_rank: number | null; history: CompanyRankingPoint[]}[];
+}
+
 /**
  * The browser-visible backend configuration has one source of truth. Keep the
  * URL out of page components so deployments only need to change the env var.
@@ -272,4 +323,24 @@ export function fetchSubject(id: string, signal?: AbortSignal): Promise<SubjectD
 
 export function fetchSubjectHistory(id: string, limit: number, signal?: AbortSignal): Promise<SubjectHistory> {
   return getJson(`/api/v1/subjects/${encodeURIComponent(id)}/history`, {limit}, signal);
+}
+
+export function fetchCompanyRankings(
+  options: {domain?: Domain; source?: string; limit?: number; offset?: number}, signal?: AbortSignal,
+): Promise<CompanyRankingsPage> {
+  return getJson("/api/v1/company-rankings", options, signal);
+}
+
+export function fetchCompanyRanking(
+  ref: string, options: {snapshot_id?: string; limit?: number; offset?: number}, signal?: AbortSignal,
+): Promise<CompanyRankingDetail> {
+  return getJson(`/api/v1/company-rankings/${encodeURIComponent(ref)}`, options, signal);
+}
+
+export function fetchCompanyRankingHistory(ref: string, limit: number, signal?: AbortSignal): Promise<CompanyRankingHistory> {
+  return getJson(`/api/v1/company-rankings/${encodeURIComponent(ref)}/history`, {limit}, signal);
+}
+
+export function fetchCompanyAppearances(companyId: string, limit: number, signal?: AbortSignal): Promise<CompanyRankingAppearances> {
+  return getJson(`/api/v1/companies/${encodeURIComponent(companyId)}/rankings`, {limit}, signal);
 }

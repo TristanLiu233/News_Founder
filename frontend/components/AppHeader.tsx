@@ -10,6 +10,7 @@ const links = [
   {href: "/today", key: "today"},
   {href: "/trending", key: "trending"},
   {href: "/search", key: "search"},
+  {href: "/rankings", key: "rankings"},
 ] as const;
 
 export function AppHeader() {

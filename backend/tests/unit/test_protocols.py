@@ -8,7 +8,11 @@ from decimal import Decimal
 
 import pytest
 
-from industry_intelligence.adapters.ranking import RankingAdapter, RankingDefinition, RankingItem
+from industry_intelligence.adapters.company_ranking import (
+    CompanyRankingAdapter,
+    CompanyRankingEntry,
+    CompanyRankingSnapshot,
+)
 from industry_intelligence.adapters.source import SourceAdapter, SourceItem
 from industry_intelligence.ai import AIGateway
 from industry_intelligence.domain.enums import Domain
@@ -31,25 +35,18 @@ class FakeSourceAdapter:
         ]
 
 
-class FakeRankingAdapter:
-    ranking = RankingDefinition(
-        name="Example ranking",
-        publisher="Example publisher",
-        domain=Domain.FINANCE,
-        metric_type="market_cap",
-        frequency="daily",
-    )
+class FakeCompanyRankingAdapter:
+    failed_count = 0
 
-    async def fetch(self) -> list[RankingItem]:
-        return [
-            RankingItem(
-                company_name="Example Corp",
-                rank=1,
-                metric_value=Decimal("100.00"),
-                observed_at=datetime.now(UTC),
-                source_url="https://example.test/rankings",
-            )
-        ]
+    async def fetch(self) -> CompanyRankingSnapshot:
+        return CompanyRankingSnapshot(
+            snapshot_key="daily:2026-09-27",
+            observed_at=datetime.now(UTC),
+            source_url="https://example.test/rankings",
+            entries=(
+                CompanyRankingEntry(rank=1, name="Example Corp", metric_value=Decimal("100.00")),
+            ),
+        )
 
 
 @dataclass
@@ -84,11 +81,11 @@ def test_source_adapter_protocol_has_a_working_fake() -> None:
     assert asyncio.run(adapter.fetch())[0].raw_metric == {"score": 42}
 
 
-def test_ranking_adapter_protocol_has_a_working_fake() -> None:
-    adapter = FakeRankingAdapter()
+def test_company_ranking_adapter_protocol_has_a_working_fake() -> None:
+    adapter = FakeCompanyRankingAdapter()
 
-    assert isinstance(adapter, RankingAdapter)
-    assert asyncio.run(adapter.fetch())[0].company_name == "Example Corp"
+    assert isinstance(adapter, CompanyRankingAdapter)
+    assert asyncio.run(adapter.fetch()).entries[0].name == "Example Corp"
 
 
 def test_ai_gateway_protocol_has_a_working_fake() -> None:

@@ -12,7 +12,7 @@ export const common = {
   en: {
     brand: "Industry Intelligence",
     primaryNav: "Primary navigation",
-    nav: {home: "Home", today: "Today", trending: "Trending", search: "Search"},
+    nav: {home: "Home", today: "Today", trending: "Trending", search: "Search", rankings: "Rankings"},
     switchLanguage: "切换到中文",
     otherLocaleLabel: "中文",
     loading: "Loading…",
@@ -32,7 +32,7 @@ export const common = {
   "zh-CN": {
     brand: "行业情报",
     primaryNav: "主导航",
-    nav: {home: "首页", today: "今日", trending: "综合趋势", search: "搜索"},
+    nav: {home: "首页", today: "今日", trending: "综合趋势", search: "搜索", rankings: "排行榜"},
     switchLanguage: "Switch to English",
     otherLocaleLabel: "EN",
     loading: "加载中…",
