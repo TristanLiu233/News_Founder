@@ -1,0 +1,33 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+backend/.venv/
+*.egg-info/
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+.pnpm-store/
+
+# Local verification artifacts
+/search-zh-verification.png
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
