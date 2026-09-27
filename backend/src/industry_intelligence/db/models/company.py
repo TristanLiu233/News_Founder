@@ -1,7 +1,7 @@
 """Minimal company identity layer for external company rankings (Phase 4).
 
 A company is one real-world entity across domains; the domains it appears in come from the
-rankings that list it. Full company profiles are Phase 5 and intentionally absent here.
+rankings that list it. Sourced profile facts live in ``company_profile`` (Phase 5), not here.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from industry_intelligence.db.base import Base
@@ -26,8 +26,6 @@ class Company(TimestampMixin, Base):
     # Not unique: two distinct companies may share a display name.
     canonical_name: Mapped[str] = mapped_column(String(255), nullable=False)
     normalized_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    website: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     aliases: Mapped[list[CompanyAlias]] = relationship(
         "CompanyAlias", back_populates="company", cascade="all, delete-orphan"

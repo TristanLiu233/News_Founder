@@ -8,7 +8,9 @@ Funnel, first match wins:
 4. a new company.
 
 A name match is rejected when it is ambiguous (several companies) or when the candidate already
-holds a different value in an exclusive scheme, for example a different ticker. Wikipedia article
+holds a different value in an exclusive scheme: a different ticker, SEC CIK, or LEI. Companies
+merged away by a reviewed merge (``company_redirects``) never match by name; identity matches
+follow the redirect to the canonical company. Wikipedia article
 links are not exclusive: editors retarget them (a row once linked to a parent's article may later
 link to its own), so a different article alone does not prove a different company. No fuzzy
 matching is used: a missed match can be merged later, a false merge corrupts history.
@@ -21,15 +23,22 @@ from dataclasses import dataclass
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 
+from industry_intelligence.adapters.company_profile.gleif import LEI_SCHEME
+from industry_intelligence.adapters.company_profile.sec_edgar import CIK_SCHEME
 from industry_intelligence.adapters.company_ranking.companiesmarketcap import SYMBOL_SCHEME
 from industry_intelligence.adapters.company_ranking.wikipedia import ARTICLE_SCHEME
-from industry_intelligence.db.models import Company, CompanyAlias, CompanyIdentity
+from industry_intelligence.db.models import (
+    Company,
+    CompanyAlias,
+    CompanyIdentity,
+    CompanyRedirect,
+)
 from industry_intelligence.services.resolution import normalize_subject_name
 
 normalize_company_name = normalize_subject_name
 
 # A company holds at most one value per exclusive scheme.
-EXCLUSIVE_SCHEMES = frozenset({SYMBOL_SCHEME})
+EXCLUSIVE_SCHEMES = frozenset({SYMBOL_SCHEME, CIK_SCHEME, LEI_SCHEME})
 
 # Reviewed on 2026-09-27 against the live lists: each pair names the same company under
 # different published names (for example "ICBC" and the bank's full name, or "NC", whose
@@ -57,6 +66,21 @@ class CompanyResolution:
     created: bool = False
 
 
+def resolve_company_redirect(session, company_id):
+    """Follow reviewed-merge redirects to the canonical company ID."""
+
+    seen = set()
+    while company_id not in seen:
+        seen.add(company_id)
+        target = session.scalar(
+            select(CompanyRedirect.canonical_id).where(CompanyRedirect.duplicate_id == company_id)
+        )
+        if target is None:
+            break
+        company_id = target
+    return company_id
+
+
 def _seed_partners(identities):
     partners = set()
     for group in SEED_IDENTITY_GROUPS:
@@ -81,7 +105,7 @@ def _company_by_identities(session, identities):
     # Identities are ordered strongest first by the adapter.
     for identity in identities:
         if identity in by_identity:
-            return session.get(Company, by_identity[identity])
+            return session.get(Company, resolve_company_redirect(session, by_identity[identity]))
     return None
 
 
@@ -100,10 +124,19 @@ def _conflicts(session, company_id, identities):
 
 
 def _unique_name_match(session, normalized, identities):
-    ids = set(session.scalars(select(Company.id).where(Company.normalized_name == normalized)))
+    merged = select(CompanyRedirect.duplicate_id)
+    ids = set(
+        session.scalars(
+            select(Company.id).where(
+                Company.normalized_name == normalized, Company.id.not_in(merged)
+            )
+        )
+    )
     ids |= set(
         session.scalars(
-            select(CompanyAlias.company_id).where(CompanyAlias.normalized_alias == normalized)
+            select(CompanyAlias.company_id).where(
+                CompanyAlias.normalized_alias == normalized, CompanyAlias.company_id.not_in(merged)
+            )
         )
     )
     if len(ids) != 1:

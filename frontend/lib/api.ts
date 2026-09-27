@@ -189,6 +189,55 @@ export interface CompanyRankingAppearances {
   rankings: {ranking: CompanyRankingDefinition; in_latest_snapshot: boolean; latest_rank: number | null; history: CompanyRankingPoint[]}[];
 }
 
+/** Persisted Company Intelligence read models (Phase 5); separate from Subject search. */
+export interface CompanyAliasInfo {
+  alias: string; locale: string | null; alias_type: string; alias_source: string;
+}
+export interface CompanyIdentityInfo {
+  scheme: string; value: string; source_key: string;
+}
+export interface CompanyListRanking {
+  key: string; name: string; domain: Domain; rank: number;
+}
+export interface CompanyListItem {
+  id: string; canonical_name: string;
+  names: {en: string; zh: string | null; zh_basis: string | null};
+  display_names: DisplayNames; has_profile: boolean; country: string | null;
+  industry: string | null; categories: string[]; rankings: CompanyListRanking[];
+}
+export interface CompaniesPage {
+  items: CompanyListItem[]; total: number; limit: number; offset: number;
+}
+export interface CompanyProfile {
+  legal_name: string | null; legal_name_locale: string | null; website: string | null;
+  country: string | null; headquarters: string | null; jurisdiction: string | null;
+  industry: string | null; categories: string[]; description: string | null;
+  description_language: string | null; business_areas: string[]; key_products: string[];
+  field_sources: Record<string, string>; profile_updated_at: string;
+}
+export interface CompanyProfileSource {
+  source_key: string; source_type: string; source_name: string; source_url: string;
+  retrieved_at: string; checked_at: string; published_at: string | null;
+  fields: string[]; used_fields: string[]; metadata: Record<string, unknown>;
+}
+export interface CompanyCurrentRanking {
+  ranking: CompanyRankingDefinition; in_latest_snapshot: boolean; latest_rank: number | null;
+  movement: CompanyMovement | "dropped" | null; rank_change: number | null;
+  raw_value: string | null; effective_at: string | null;
+}
+export interface CompanyRelatedSubject {
+  id: string; title: string; domain: Domain; subject_type: string;
+  strategy: string; evidence: Record<string, unknown>;
+}
+export interface CompanyDetail {
+  id: string; requested_id: string; redirected: boolean; canonical_name: string;
+  names: {en: string; zh: string | null; zh_basis: string | null};
+  display_names: DisplayNames; aliases: CompanyAliasInfo[]; identities: CompanyIdentityInfo[];
+  profile: CompanyProfile | null; profile_sources: CompanyProfileSource[];
+  current_rankings: CompanyCurrentRanking[]; domains: Domain[];
+  related_subjects: CompanyRelatedSubject[]; related_news_count: number;
+}
+
 /**
  * The browser-visible backend configuration has one source of truth. Keep the
  * URL out of page components so deployments only need to change the env var.
@@ -280,7 +329,7 @@ export class ApiError extends Error {
   }
 }
 
-type Query = Record<string, string | number | undefined>;
+type Query = Record<string, string | number | boolean | undefined>;
 
 async function getJson<T>(path: string, query: Query = {}, signal?: AbortSignal): Promise<T> {
   if (!API_BASE_URL) throw new Error("NEXT_PUBLIC_API_BASE_URL is not configured.");
@@ -303,7 +352,7 @@ export function fetchTrending(
 }
 
 export function fetchNews(
-  options: {domain?: Domain; source?: string; subject_id?: string; limit?: number; offset?: number},
+  options: {domain?: Domain; source?: string; subject_id?: string; company_id?: string; limit?: number; offset?: number},
   signal?: AbortSignal,
 ): Promise<NewsPage> {
   return getJson("/api/v1/news", options, signal);
@@ -343,4 +392,15 @@ export function fetchCompanyRankingHistory(ref: string, limit: number, signal?: 
 
 export function fetchCompanyAppearances(companyId: string, limit: number, signal?: AbortSignal): Promise<CompanyRankingAppearances> {
   return getJson(`/api/v1/companies/${encodeURIComponent(companyId)}/rankings`, {limit}, signal);
+}
+
+export function fetchCompanies(
+  options: {q?: string; domain?: Domain; ranking?: string; has_profile?: boolean; limit?: number; offset?: number},
+  signal?: AbortSignal,
+): Promise<CompaniesPage> {
+  return getJson("/api/v1/companies", options, signal);
+}
+
+export function fetchCompany(id: string, signal?: AbortSignal): Promise<CompanyDetail> {
+  return getJson(`/api/v1/companies/${encodeURIComponent(id)}`, {}, signal);
 }

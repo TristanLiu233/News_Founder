@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Contact (URL or email) of the deployment maintainer, sent in the User-Agent only to
     # publishers whose policy requires it (Wikimedia). Never commit a real value.
     source_contact: str | None = Field(default=None, repr=False)
+    # Separate contact (email) declared in the User-Agent only to SEC EDGAR hosts, as SEC's
+    # fair-access policy requires. Never commit a real value; never reused for other hosts.
+    sec_contact: str | None = Field(default=None, repr=False)
 
     app_name: str = "Industry Intelligence & Ranking Platform"
     environment: str = "development"
@@ -60,7 +63,7 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
-    @field_validator("source_contact")
+    @field_validator("source_contact", "sec_contact")
     @classmethod
     def placeholder_contact_is_unset(cls, value: str | None) -> str | None:
         """Blank values and documentation placeholders count as not configured."""

@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - The Python virtualenv lives at the repository root (`.venv/`); backend commands run from `backend/` (e.g. `../.venv/bin/pytest`).
 - `Settings` (`backend/src/industry_intelligence/config.py`) always loads the repository-root `.env` by absolute path, so the CLI, Alembic, and pytest share one `DATABASE_URL` regardless of working directory. `migrations/env.py` overrides the URL in `alembic.ini` with that setting.
+- `.env` is gitignored and holds local-only values such as `SOURCE_CONTACT` (the deployment maintainer's own contact, sent only to Wikimedia hosts) and `SEC_CONTACT` (a separate contact, sent only to SEC hosts). `HTTPClient` enforces this per request host. Never print them or copy a real value into tracked files; `.env.example` keeps only placeholders.
 - PostgreSQL with pgvector comes from `docker compose up -d` (image `pgvector/pgvector:pg16`).
 
 ```bash
@@ -22,6 +23,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # backend/ — single file or single test
 ../.venv/bin/pytest tests/unit/test_search.py
 ../.venv/bin/pytest tests/unit/test_phase2.py::test_rrf_and_freshness_exact_math
+
+# backend/ — external company rankings (current published versions only)
+../.venv/bin/python -m industry_intelligence.cli company-ranking-ingest cmc_tech_market_cap
+../.venv/bin/python -m industry_intelligence.cli company-ranking-ingest-all
 
 # frontend/ — dev server (reads NEXT_PUBLIC_API_BASE_URL from frontend/.env.local)
 npm run dev
@@ -47,15 +52,17 @@ Tests marked `integration` (`tests/integration/`) connect to the database from t
 
 **Transactions:** services take a SQLAlchemy `Session` and do not commit. Callers own the transaction boundary: the CLI uses `session_factory.begin()`, and API routes use `db/session.get_db_session`. `merge_subjects` also relies on the caller's transaction.
 
-**API** (`api/`): thin routers over services. `api/sources.py` serves `/sources`, `/today`, and `/trending`; `api/subjects.py` serves Subject Detail and rank history from `services/subject_detail.py`. `create_app(settings)` in `main.py` does not connect to the database at startup. Ingestion, ranking, relinking, and reindexing are intentionally CLI-only (`cli.py`); there are no refresh endpoints.
+**API** (`api/`): thin routers over services. `api/sources.py` serves `/sources`, `/today`, and `/trending`; `api/subjects.py` serves Subject Detail and rank history from `services/subject_detail.py`. `api/company_rankings.py` serves `/company-rankings`, `/company-rankings/{key-or-id}`, its `/history`, and `/companies/{id}/rankings`. `create_app(settings)` in `main.py` does not connect to the database at startup. Ingestion, ranking, relinking, and reindexing are intentionally CLI-only (`cli.py`); there are no refresh endpoints.
 
 **Company rankings (Phase 4)** are a separate pipeline from source `RankList`s. `adapters/company_ranking/registry.py` → `COMPANY_RANKINGS` (`CompanyRankingDefinition`) lists external publisher rankings. Adapters are constructed as `Adapter(http, definition)` and return one `CompanyRankingSnapshot` DTO with entries. `services/company_ranking_ingestion.persist_company_snapshot()` runs in the caller's transaction: it upserts the `Ranking`, replays an existing `snapshot_key`, skips content identical to the neighbouring snapshot, resolves companies through `services/company_resolution.resolve_company`, and writes an immutable `RankingSnapshot` with `RankingEntry` rows. `services/company_rankings.py` computes movement from the preceding snapshot for `api/company_rankings.py`. Wikipedia rankings refuse to fetch unless `SOURCE_CONTACT` is set (Wikimedia User-Agent policy); the contact is passed only to that client (`HTTPClient(settings, contact=...)`). The Wikipedia adapter reads only the current page via `/api/rest_v1/page/html/{title}` (no Action API, no historical revisions). Wikimedia requests currently remain HTTP 403, so these rankings are not live verified.
+
+**Company profiles (Phase 5)** enrich reviewed targets only. `adapters/company_profile/targets.py` → `PROFILE_TARGETS` (reviewed symbol → CIK/LEI/website/CompaniesMarketCap slug/official Chinese-name pages) and `registry.py` → `PROFILE_SOURCES` (`official_website`, `sec_edgar`, `gleif`, `companiesmarketcap`). Adapters are `Adapter(http, definition)` with `async fetch(target)` returning `ExternalCompanyProfile`. `services/company_profile_ingestion.persist_profile_source()` runs in the caller's transaction: it attaches identities conservatively, records names as aliases, upserts one record per (company, source) by content hash (identical content only refreshes `checked_at`), and rebuilds `CompanyProfile` by `FIELD_PRIORITY` with `field_sources`. `services/company_subject_linking.relink_all_companies()` rebuilds deterministic links (exchange code, then unique exact name). `services/company_merge.merge_companies()` is an explicit reviewed merge with redirects. `api/companies.py` serves `/companies` and `/companies/{id}`; `/news?company_id=` reuses the news tables. SEC requires `SEC_CONTACT`.
 
 **Placeholders for future phases, not active code paths:** `ai/gateway.py` (`AIGateway` protocol; no phase uses LLMs yet).
 
 ## Frontend architecture (`frontend/`)
 
-- All pages are client components: `app/page.tsx` (Home), `app/today`, `app/trending`, `app/search`, `app/rankings`, and `app/subject/[id]`. Query state (`?domain=`, search params) is read from `window.location` in effects and written with `history.pushState`, which avoids `useSearchParams` Suspense requirements during `next build`.
+- All pages are client components: `app/page.tsx` (Home), `app/today`, `app/trending`, `app/search`, `app/rankings`, `app/companies`, `app/company/[id]`, and `app/subject/[id]`. Query state (`?domain=`, search params) is read from `window.location` in effects and written with `history.pushState`, which avoids `useSearchParams` Suspense requirements during `next build`.
 - `app/layout.tsx` wraps pages in `LocaleProvider` (`lib/i18n.tsx`; `useLocale()`, locale stored in `localStorage` under `locale`) and the shared `AppHeader`. Reusable UI lives in `components/shared.tsx`.
 - UI strings live in `common` (`lib/i18n.tsx`) for shared components and in a per-page dictionary (`copy` or `labels`) keyed by `en` and `zh-CN`. Any new string needs both entries.
 - `lib/api.ts` holds hand-written TypeScript types that mirror backend response shapes, plus fetch helpers built on `NEXT_PUBLIC_API_BASE_URL`. Update these types whenever an API response changes.

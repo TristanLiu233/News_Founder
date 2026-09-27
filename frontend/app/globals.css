@@ -103,7 +103,7 @@ details.secondary > summary { margin: 0; font-size: 1rem; }
 .chips li { padding: .3rem .6rem; border: 1px solid #d4d1c7; border-radius: 999px; background: #f8f7f2; font-size: .88rem; overflow-wrap: anywhere; }
 .chips small { color: #87908a; font-size: .7rem; }
 
-/* Keep the five primary links on one row; below 46rem they take their own row. */
+/* Let the six primary links wrap cleanly as the viewport narrows. */
 @media (max-width: 52rem) {
   .header-inner { gap: 1rem; }
   .app-header nav a { padding: .4rem .5rem; }
@@ -128,6 +128,8 @@ details.secondary > summary { margin: 0; font-size: 1rem; }
 .company-table td.rank { width: 3.2rem; }
 .company-table .change { width: 1%; white-space: nowrap; }
 .company-name { display: block; font-weight: 700; overflow-wrap: anywhere; }
+.company-name { color: #17201c; text-decoration: none; }
+.company-name:hover { color: #087f5b; text-decoration: underline; }
 .company-meta { display: block; margin-top: .15rem; color: #87908a; font-size: .74rem; }
 .row-details summary { margin-top: .2rem; color: #87908a; font-size: .74rem; font-weight: 600; }
 .other-rankings { margin: .3rem 0 0; padding-left: 1rem; color: #626861; font-size: .78rem; }
@@ -168,3 +170,19 @@ button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .5; }
 input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid #69bb9e; outline-offset: 2px; }
 @media (max-width: 48rem) { .search-filters { grid-template-columns: repeat(2, 1fr); } }
+
+/* Company discovery and detail */
+.company-search .query-row { margin-bottom: .75rem; }
+.company-search .domain-tabs { display: inline-flex; margin: .75rem 0 0 .5rem; vertical-align: middle; }
+.domain-reset { padding: .55rem 1rem; border: 1px solid #b8bdb5; border-radius: 999px; background: #fff; color: #17201c; font-weight: 650; }
+.domain-reset[aria-pressed="true"] { border-color: #087f5b; background: #087f5b; color: #fff; }
+.company-directory { display: grid; gap: .65rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+.company-directory > li { padding: 1rem 1.1rem; border: 1px solid #d4d1c7; border-radius: .65rem; background: #fff; }
+.company-summary { display: flex; flex-wrap: wrap; gap: .35rem .75rem; margin: .45rem 0; color: #626861; font-size: .82rem; }
+.detail-section { margin-top: 2rem; }
+.detail-section > .section-title { margin-top: 0; }
+@media (max-width: 42rem) {
+  .company-search .domain-tabs { display: flex; margin-left: 0; }
+  .query-row { align-items: stretch; }
+  .query-row button { padding-inline: 1rem; }
+}

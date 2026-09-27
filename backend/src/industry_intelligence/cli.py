@@ -5,6 +5,8 @@ import asyncio
 import json
 from uuid import UUID
 
+from industry_intelligence.adapters.company_profile.registry import PROFILE_SOURCES
+from industry_intelligence.adapters.company_profile.targets import TARGETS_BY_SYMBOL
 from industry_intelligence.adapters.company_ranking.registry import COMPANY_RANKINGS
 from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES
 from industry_intelligence.adapters.source.registry import SOURCES
@@ -39,6 +41,16 @@ def main():
     # Current published versions only: no option requests historical source revisions.
     company.add_argument("ranking", choices=COMPANY_RANKINGS)
     sub.add_parser("company-ranking-ingest-all")
+    profile = sub.add_parser("company-profile-ingest")
+    # Reviewed targets only; repeat --symbol/--source to narrow the run.
+    profile.add_argument("--symbol", action="append", choices=TARGETS_BY_SYMBOL)
+    profile.add_argument("--source", action="append", choices=PROFILE_SOURCES)
+    sub.add_parser("company-subject-link")
+    merge = sub.add_parser("company-merge")
+    # A reviewed, explicit merge of one duplicate company into its canonical company.
+    merge.add_argument("canonical", type=UUID)
+    merge.add_argument("duplicate", type=UUID)
+    merge.add_argument("--reason", required=True)
     args = parser.parse_args()
     settings = get_settings()
     configure_logging(settings)
@@ -87,6 +99,24 @@ def main():
                 if args.command == "company-ranking-ingest"
                 else ingest_all_company_rankings(settings, factory)
             )
+        elif args.command == "company-profile-ingest":
+            from industry_intelligence.services.company_profile_ingestion import (
+                ingest_company_profiles,
+            )
+
+            result = asyncio.run(
+                ingest_company_profiles(settings, factory, args.symbol, args.source)
+            )
+        elif args.command == "company-subject-link":
+            from industry_intelligence.services.company_subject_linking import relink_all_companies
+
+            with factory.begin() as session:
+                result = relink_all_companies(session)
+        elif args.command == "company-merge":
+            from industry_intelligence.services.company_merge import merge_companies
+
+            with factory.begin() as session:
+                result = merge_companies(session, args.canonical, args.duplicate, args.reason)
         elif args.command in {"ingest-content", "ingest-content-all"}:
             from industry_intelligence.services.content_ingestion import (
                 ingest_all_content,

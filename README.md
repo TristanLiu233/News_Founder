@@ -117,7 +117,9 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 | `/trending` | Cross-source composite attention per domain; Finance is labelled Market Pulse | Top 20, expandable to 50 |
 | `/search` | Multilingual canonical search; the source filter is built from `/api/v1/sources` (`searchable` keys) | 20 per page |
 | `/subject/{id}` | Subject Detail: current rank, rank history, source appearances, related news, aliases | 20 lists, 10 news per page |
-| `/rankings` | External company rankings per domain: ranking selector, latest snapshot table with movement, dropped entries, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
+| `/rankings` | External company rankings per domain: ranking selector, latest snapshot table with movement, dropped entries, company names linking to Company Detail, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
+| `/companies` | Company directory with company search (names, aliases, legal/localized names, identifiers), domain filter, and profile availability; separate from Subject search | 30 per page, previous/next |
+| `/company/{id}` | Company Detail: identity, sourced profile facts with provenance, external rankings and history, related news via linked Subjects, deterministic Subject links | Up to 10 related news |
 
 Header navigation is shared across pages. URLs are locale-independent; the locale stays in `localStorage`. Subject names in Trending and Search open the internal Subject Detail page; news titles and source titles open the original external URL in a new tab. Pages only read persisted data: no page load triggers ingestion, ranking, reindexing, embeddings, or LLM calls. The legacy `/?view=trending` URL redirects to `/trending`.
 
@@ -320,7 +322,7 @@ Current status: Wikimedia requests remain HTTP 403 from the current application 
 
 Candidates rejected during the source audit: Newzoo Top 25 (HTTP 403 Cloudflare challenge), Forbes Global 2000 (only an undocumented internal JSON endpoint, and a cross-industry list), Fortune Global 500 (cross-industry list, terms unclear), Brand Finance Brandirectory (JavaScript-only application), Motley Fool largest companies (cross-industry), and Wikipedia's largest technology companies by revenue (its current table has no explicit rank column).
 
-Company identity is intentionally minimal (Phase 5 builds profiles) and independent of `Subject`. Resolution uses, in order: an exact external identity (a CompaniesMarketCap symbol or a Wikipedia article title including any section fragment), a reviewed identity-to-identity seed pair (for example `1398.HK` ↔ *Industrial and Commercial Bank of China*), a unique exact normalized name or alias, and otherwise a new company. A name match is rejected when several companies share the name or when the candidate holds a different ticker symbol. Wikipedia links are not treated as exclusive because editors retarget them. There is no fuzzy matching, so a false negative is preferred to a false merge.
+Company identity is minimal and independent of `Subject`; sourced profile facts live in the Phase 5 profile tables. Resolution uses, in order: an exact external identity (a CompaniesMarketCap symbol or a Wikipedia article title including any section fragment), a reviewed identity-to-identity seed pair (for example `1398.HK` ↔ *Industrial and Commercial Bank of China*), a unique exact normalized name or alias, and otherwise a new company. A name match is rejected when several companies share the name or when the candidate holds a different value in an exclusive scheme (ticker symbol, and since Phase 5 SEC CIK or LEI). Companies merged away by a reviewed merge never match by name. Wikipedia links are not treated as exclusive because editors retarget them. There is no fuzzy matching, so a false negative is preferred to a false merge.
 
 Snapshots are append-only. Re-ingesting the same `snapshot_key` is a replay. A new key whose entries hash to the same content as its neighbour in history is recorded as unchanged instead of duplicated. Movement is `rank_change = previous_rank − current_rank` against the immediately preceding snapshot of the same ranking (ordered by `effective_at`): a company absent before is **New**, one absent now is listed as dropped, and the first snapshot shows no movement.
 
@@ -342,3 +344,76 @@ Offline fixture verification is not production live ingestion. Parser, movement,
 | GET | `/api/v1/companies/{id}/rankings?limit=` | A company's appearances across external rankings, including dropped points |
 
 Page loads only read PostgreSQL. They never fetch external sites, ingest, or call AI.
+
+## Phase 5 — Company Profiles
+
+Company Intelligence enriches a reviewed set of ranked companies while keeping `Company`
+separate from canonical `Subject`. The current target registry contains 15 representative
+ranking leaders across Computer, Finance, and Gaming; it is not a bulk profile of all 294
+companies. Facts are never generated or machine-translated.
+
+| Source | Stored facts | Live coverage |
+| --- | --- | --- |
+| Official company website | Website, the homepage's own short description, reviewed localized names | 12 reviewed sites |
+| SEC EDGAR | SIC industry, address/incorporation facts, ticker/exchange metadata, current-period XBRL business/segment and product/service member labels | 11 registrants |
+| GLEIF | Registered legal/local names, headquarters, jurisdiction | 15 reviewed head-office LEIs |
+| CompaniesMarketCap company page | Publisher category tags only | 15 reviewed pages |
+
+Each normalized source record keeps its URL, retrieval/check time, content hash, facts, and
+metadata. `CompanyProfile` is a derived field-priority view with `field_sources`, so the UI can
+show provenance. Identical content is a replay: it updates `checked_at` without replacing the
+original `retrieved_at`. Source failures are isolated. The project does not store page bodies or
+CompaniesMarketCap prose descriptions.
+
+SEC's fair-access contact is separate from the Wikimedia contact and is sent only to `sec.gov`
+and `data.sec.gov`, including after redirects. Configure it in the gitignored repository-root
+`.env`:
+
+```env
+SEC_CONTACT=your-email@example.com
+```
+
+The deployment owner must replace the placeholder. A real contact must never be committed.
+`SOURCE_CONTACT` remains Wikimedia-only, and neither contact is sent to any other host.
+
+The bilingual `/companies` page is a bounded, paginated company directory with company-specific
+search and domain filters; `/search` remains canonical Subject search. `/company/[id]` shows
+identity, sourced profile facts, external ranking context/history, related news through the
+existing content architecture, visible profile provenance, and a canonical Subject link only
+when deterministic evidence exists. Company names in `/rankings` link to Company Detail.
+Missing profile fields, rankings, news, or Subject links are normal empty states.
+
+```bash
+# All reviewed targets and applicable adopted sources
+python -m industry_intelligence.cli company-profile-ingest
+
+# Narrow by reviewed ranking symbol and/or source (options may repeat)
+python -m industry_intelligence.cli company-profile-ingest --symbol NVDA --source sec_edgar
+
+# Rebuild deterministic Company ↔ Subject links
+python -m industry_intelligence.cli company-subject-link
+
+# Explicit reviewed merge; unsafe CIK/LEI or same-snapshot merges are refused
+python -m industry_intelligence.cli company-merge CANONICAL_UUID DUPLICATE_UUID --reason "review evidence"
+```
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/v1/companies?q=&domain=&ranking=&has_profile=&limit=&offset=` | Bounded company discovery and company search |
+| GET | `/api/v1/companies/{id}` | Sourced Company Detail, current ranking context, provenance, and deterministic Subject context |
+| GET | `/api/v1/companies/{id}/rankings?limit=` | External ranking appearances and history |
+| GET | `/api/v1/news?company_id=&limit=&offset=` | Existing news records related through linked canonical Subjects |
+
+Company identity resolution is exact and auditable: external identity, reviewed identity seed,
+unique exact name/alias, then a new company. CompaniesMarketCap symbol, SEC CIK, and LEI are
+exclusive schemes. Reviewed merges keep redirects and refuse conflicting legal identities or
+same-snapshot collisions. Company↔Subject linking uses exact A-share exchange identity first,
+then a unique exact company/stock name or alias. There is no fuzzy, embedding, or LLM matching.
+
+Live validation on 2026-09-28 persisted profiles for all 15 reviewed targets across 53 applicable
+source records (12 official website, 11 SEC, 15 GLEIF, 15 CompaniesMarketCap), and a second run
+replayed all 53 unchanged. Microsoft and Sony's XBRL labels were live parsed from their
+schema-embedded label links. XBRL member tags remain filer-defined and are labelled in the UI as
+reported business/segment or product/service members, not asserted to be official divisions;
+some filers tag reconciling or non-segment items on these axes (for example an HSBC lending
+member and Sony's elimination/"All Other" members), and no filer-specific filter is applied.

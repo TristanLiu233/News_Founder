@@ -374,19 +374,22 @@ def test_contact_is_sent_only_by_clients_that_opt_in():
         agents.append(request.headers["User-Agent"])
         return httpx.Response(200, text="ok")
 
-    async def run(contact):
+    async def run(contact, url="https://en.wikipedia.org/"):
         client = HTTPClient(
             make_settings(source_contact="ops@research.org"),
             transport=httpx.MockTransport(handler),
             contact=contact,
         )
         async with client as http:
-            await http.get("https://source.test/")
+            await http.get(url)
 
     asyncio.run(run(None))
     asyncio.run(run("ops@research.org"))
+    # Opting in is not enough: the Wikimedia contact never leaves Wikimedia hosts.
+    asyncio.run(run("ops@research.org", "https://source.test/"))
     assert "ops@research.org" not in agents[0]
     assert agents[1].endswith("; ops@research.org)")
+    assert "ops@research.org" not in agents[2]
 
 
 def test_registry_is_explicit_and_covers_each_domain():

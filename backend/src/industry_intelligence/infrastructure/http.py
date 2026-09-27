@@ -1,10 +1,26 @@
-"""Shared bounded HTTP transport; parsers and 4xx failures are never retried."""
+"""Shared bounded HTTP transport; parsers and 4xx failures are never retried.
+
+Maintainer contacts are scoped per publisher. A client opts in to a contact, and the contact is
+then attached only to requests whose host belongs to that publisher, re-checked on every request
+including redirects: ``contact`` (SOURCE_CONTACT) reaches Wikimedia hosts only and
+``sec_contact`` (SEC_CONTACT) reaches SEC hosts only. Every other host gets no contact.
+"""
 
 import asyncio
 
 import httpx
 
 from industry_intelligence.config import Settings
+
+WIKIMEDIA_DOMAINS = ("wikipedia.org", "wikimedia.org", "wikidata.org")
+SEC_DOMAINS = ("sec.gov",)
+# SEC's fair-access policy asks for a declared "Product/Version contact" User-Agent.
+SEC_PRODUCT = "IndustryIntelligenceRankingPlatform/0.1"
+
+
+def host_in(host: str | None, domains: tuple[str, ...]) -> bool:
+    host = (host or "").lower().rstrip(".")
+    return any(host == domain or host.endswith(f".{domain}") for domain in domains)
 
 
 def user_agent(contact: str | None = None) -> str:
@@ -14,15 +30,37 @@ def user_agent(contact: str | None = None) -> str:
     return f"IndustryIntelligence/0.1 ({details})"
 
 
+def sec_user_agent(contact: str) -> str:
+    return f"{SEC_PRODUCT} {contact}"
+
+
 class HTTPClient:
-    def __init__(self, settings: Settings, transport=None, contact: str | None = None):
-        # The contact is opt-in per client so it only reaches publishers whose policy asks for it.
+    def __init__(
+        self,
+        settings: Settings,
+        transport=None,
+        contact: str | None = None,
+        sec_contact: str | None = None,
+    ):
+        self.contact = contact
+        self.sec_contact = sec_contact
         self.client = httpx.AsyncClient(
             timeout=settings.source_http_timeout,
-            headers={"User-Agent": user_agent(contact)},
+            headers={"User-Agent": user_agent()},
             follow_redirects=True,
             transport=transport,
+            event_hooks={"request": [self._identify]},
         )
+
+    async def _identify(self, request: httpx.Request) -> None:
+        host = request.url.host
+        if self.sec_contact and host_in(host, SEC_DOMAINS):
+            agent = sec_user_agent(self.sec_contact)
+        elif self.contact and host_in(host, WIKIMEDIA_DOMAINS):
+            agent = user_agent(self.contact)
+        else:
+            agent = user_agent()
+        request.headers["User-Agent"] = agent
 
     async def __aenter__(self):
         return self

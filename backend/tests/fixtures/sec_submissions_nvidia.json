@@ -1,0 +1,82 @@
+{
+ "cik": "0001045810",
+ "entityType": "operating",
+ "sic": "3674",
+ "sicDescription": "Semiconductors & Related Devices",
+ "name": "NVIDIA CORP",
+ "tickers": [
+  "NVDA"
+ ],
+ "exchanges": [
+  "Nasdaq"
+ ],
+ "ein": "943177549",
+ "website": "",
+ "investorWebsite": "",
+ "category": "Large accelerated filer",
+ "fiscalYearEnd": "0131",
+ "stateOfIncorporation": "DE",
+ "stateOfIncorporationDescription": "DE",
+ "addresses": {
+  "mailing": {
+   "street1": "2788 SAN TOMAS EXPRESSWAY",
+   "street2": null,
+   "city": "SANTA CLARA",
+   "stateOrCountry": "CA",
+   "zipCode": "95051",
+   "stateOrCountryDescription": "CA",
+   "isForeignLocation": 0,
+   "foreignStateTerritory": null,
+   "country": null,
+   "countryCode": null
+  },
+  "business": {
+   "street1": "2788 SAN TOMAS EXPRESSWAY",
+   "street2": null,
+   "city": "SANTA CLARA",
+   "stateOrCountry": "CA",
+   "zipCode": "95051",
+   "stateOrCountryDescription": "CA",
+   "isForeignLocation": null,
+   "foreignStateTerritory": null,
+   "country": null,
+   "countryCode": null
+  }
+ },
+ "formerNames": [
+  {
+   "name": "NVIDIA CORP/CA",
+   "from": "1998-05-07T04:00:00.000Z",
+   "to": "2002-06-04T04:00:00.000Z"
+  }
+ ],
+ "filings": {
+  "recent": {
+   "accessionNumber": [
+    "0001696841-26-000014",
+    "0001199039-26-000016",
+    "0001045810-26-000021"
+   ],
+   "filingDate": [
+    "2026-09-23",
+    "2026-09-22",
+    "2026-02-25"
+   ],
+   "reportDate": [
+    "2026-09-21",
+    "2026-09-18",
+    "2026-01-25"
+   ],
+   "form": [
+    "4",
+    "4",
+    "10-K"
+   ],
+   "primaryDocument": [
+    "xslF345X06/wk-form4_1790196985.xml",
+    "xslF345X06/wk-form4_1790110579.xml",
+    "nvda-20260125.htm"
+   ]
+  }
+ }
+}

@@ -1,6 +1,12 @@
 """ORM models available to metadata and application code."""
 
 from industry_intelligence.db.models.company import Company, CompanyAlias, CompanyIdentity
+from industry_intelligence.db.models.company_profile import (
+    CompanyProfile,
+    CompanyProfileSource,
+    CompanyRedirect,
+    CompanySubjectLink,
+)
 from industry_intelligence.db.models.content import ContentItem, ContentSubjectLink
 from industry_intelligence.db.models.rank_list import RankList
 from industry_intelligence.db.models.rank_observation import RankObservation
@@ -13,6 +19,10 @@ __all__ = [
     "Company",
     "CompanyAlias",
     "CompanyIdentity",
+    "CompanyProfile",
+    "CompanyProfileSource",
+    "CompanyRedirect",
+    "CompanySubjectLink",
     "ContentItem",
     "ContentSubjectLink",
     "RankList",

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type SyntheticEvent } from "react";
+import Link from "next/link";
 
 import { DomainTabs, ExternalLink, isDomain, PageState, TrendBadge } from "../../components/shared";
 import {
@@ -101,7 +102,7 @@ function EntriesTable({ detail, locale }: { detail: CompanyRankingDetail; locale
       const meta = [entry.metadata.symbol, entry.metadata.country].filter((value): value is string => typeof value === "string");
       return <tr key={entry.company_id}>
         <td className="rank">#{entry.rank}</td>
-        <td><span className="company-name" lang={detail.ranking.primary_language}>{entry.display_name}</span>
+        <td><Link className="company-name" href={`/company/${entry.company_id}`} lang={detail.ranking.primary_language}>{entry.display_name}</Link>
           {meta.length > 0 && <span className="company-meta">{meta.join(" · ")}</span>}
           <OtherRankings entry={entry} rankingKey={detail.ranking.key} locale={locale}/>
         </td>

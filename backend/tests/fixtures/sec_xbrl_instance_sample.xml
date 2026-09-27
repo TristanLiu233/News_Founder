@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic XBRL instance modelled on an EDGAR 10-K extracted instance (not a real filing).
+     It exercises: current vs prior period, segment and product axes, a structural standard
+     member, a standard member with a filer label, an unrelated axis, and an unlabelled member. -->
+<xbrl xmlns="http://www.xbrl.org/2003/instance"
+      xmlns:xbrldi="http://xbrl.org/2006/xbrldi"
+      xmlns:dei="http://xbrl.sec.gov/dei/2025"
+      xmlns:us-gaap="http://fasb.org/us-gaap/2025"
+      xmlns:srt="http://fasb.org/srt/2025"
+      xmlns:exmp="http://www.example.test/20260131">
+  <context id="c-fy">
+    <entity><identifier scheme="http://www.sec.gov/CIK">0000000001</identifier></entity>
+    <period><startDate>2025-02-01</startDate><endDate>2026-01-31</endDate></period>
+  </context>
+  <context id="c-seg-a">
+    <entity><identifier scheme="http://www.sec.gov/CIK">0000000001</identifier>
+      <segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">exmp:ComputeSegmentMember</xbrldi:explicitMember></segment></entity>
+    <period><startDate>2025-02-01</startDate><endDate>2026-01-31</endDate></period>
+  </context>
+  <context id="c-seg-b-prod">
+    <entity><identifier scheme="http://www.sec.gov/CIK">0000000001</identifier>
+      <segment>
+        <xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">exmp:GraphicsSegmentMember</xbrldi:explicitMember>
+        <xbrldi:explicitMember dimension="srt:ProductOrServiceAxis">exmp:GamingMember</xbrldi:explicitMember>
+      </segment></entity>
+    <period><startDate>2025-02-01</startDate><endDate>2026-01-31</endDate></period>
+  </context>
+  <context id="c-prod-service">
+    <entity><identifier scheme="http://www.sec.gov/CIK">0000000001</identifier>
+      <segment><xbrldi:explicitMember dimension="srt:ProductOrServiceAxis">us-gaap:ServiceMember</xbrldi:explicitMember></segment></entity>
+    <period><instant>2026-01-31</instant></period>
+  </context>
+  <context id="c-structural">
+    <entity><identifier scheme="http://www.sec.gov/CIK">0000000001</identifier>
+      <segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">us-gaap:CorporateNonSegmentMember</xbrldi:explicitMember></segment></entity>
+    <period><startDate>2025-02-01</startDate><endDate>2026-01-31</endDate></period>
+  </context>
+  <context id="c-prior">
+    <entity><identifier scheme="http://www.sec.gov/CIK">0000000001</identifier>
+      <segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">exmp:DiscontinuedLegacyMember</xbrldi:explicitMember></segment></entity>
+    <period><startDate>2024-02-01</startDate><endDate>2025-01-31</endDate></period>
+  </context>
+  <context id="c-geo">
+    <entity><identifier scheme="http://www.sec.gov/CIK">0000000001</identifier>
+      <segment><xbrldi:explicitMember dimension="srt:StatementGeographicalAxis">exmp:EuropeMember</xbrldi:explicitMember></segment></entity>
+    <period><startDate>2025-02-01</startDate><endDate>2026-01-31</endDate></period>
+  </context>
+  <context id="c-unlabelled">
+    <entity><identifier scheme="http://www.sec.gov/CIK">0000000001</identifier>
+      <segment><xbrldi:explicitMember dimension="srt:ProductOrServiceAxis">exmp:UnlabelledMember</xbrldi:explicitMember></segment></entity>
+    <period><startDate>2025-02-01</startDate><endDate>2026-01-31</endDate></period>
+  </context>
+  <dei:DocumentType contextRef="c-fy">10-K</dei:DocumentType>
+  <dei:DocumentPeriodEndDate contextRef="c-fy">2026-01-31</dei:DocumentPeriodEndDate>
+</xbrl>

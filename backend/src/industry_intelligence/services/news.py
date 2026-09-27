@@ -2,7 +2,13 @@
 
 from sqlalchemy import func, select
 
-from industry_intelligence.db.models import ContentItem, ContentSubjectLink, Source, Subject
+from industry_intelligence.db.models import (
+    CompanySubjectLink,
+    ContentItem,
+    ContentSubjectLink,
+    Source,
+    Subject,
+)
 
 
 def serialize_content(row, linked=()):
@@ -22,11 +28,30 @@ def serialize_content(row, linked=()):
 
 
 def list_news(
-    session, domain=None, source=None, language=None, subject_id=None, limit=20, offset=0
+    session,
+    domain=None,
+    source=None,
+    language=None,
+    subject_id=None,
+    limit=20,
+    offset=0,
+    company_id=None,
 ):
     query = select(ContentItem, Source).join(Source)
     if subject_id:
         query = query.join(ContentSubjectLink).where(ContentSubjectLink.subject_id == subject_id)
+    if company_id:
+        # A company's related news is the news of its deterministically linked subjects.
+        linked = select(CompanySubjectLink.subject_id).where(
+            CompanySubjectLink.company_id == company_id
+        )
+        query = query.where(
+            ContentItem.id.in_(
+                select(ContentSubjectLink.content_item_id).where(
+                    ContentSubjectLink.subject_id.in_(linked)
+                )
+            )
+        )
     if domain:
         query = query.where(ContentItem.domain == domain)
     if source:

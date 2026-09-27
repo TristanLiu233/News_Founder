@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic label linkbase matching sec_xbrl_instance_sample.xml (not a real filing). -->
+<link:linkbase xmlns:link="http://www.xbrl.org/2003/linkbase"
+               xmlns:xlink="http://www.w3.org/1999/xlink">
+  <link:labelLink xlink:type="extended" xlink:role="http://www.xbrl.org/2003/role/link">
+    <link:loc xlink:type="locator" xlink:label="loc_compute" xlink:href="exmp-20260131.xsd#exmp_ComputeSegmentMember"/>
+    <link:label xlink:type="resource" xlink:label="lab_compute" xlink:role="http://www.xbrl.org/2003/role/terseLabel" xml:lang="en-US">Compute &amp; Networking</link:label>
+    <link:label xlink:type="resource" xlink:label="lab_compute" xlink:role="http://www.xbrl.org/2003/role/label" xml:lang="en-US">Compute And Networking Segment [Member]</link:label>
+    <link:labelArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label" xlink:from="loc_compute" xlink:to="lab_compute"/>
+    <link:loc xlink:type="locator" xlink:label="loc_graphics" xlink:href="exmp-20260131.xsd#exmp_GraphicsSegmentMember"/>
+    <link:label xlink:type="resource" xlink:label="lab_graphics" xlink:role="http://www.xbrl.org/2003/role/label" xml:lang="en-US">Graphics [Member]</link:label>
+    <link:labelArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label" xlink:from="loc_graphics" xlink:to="lab_graphics"/>
+    <link:loc xlink:type="locator" xlink:label="loc_gaming" xlink:href="exmp-20260131.xsd#exmp_GamingMember"/>
+    <link:label xlink:type="resource" xlink:label="lab_gaming" xlink:role="http://www.xbrl.org/2003/role/terseLabel" xml:lang="en-US">Gaming</link:label>
+    <link:label xlink:type="resource" xlink:label="lab_gaming" xlink:role="http://www.xbrl.org/2003/role/terseLabel" xml:lang="ja">ゲーム</link:label>
+    <link:labelArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label" xlink:from="loc_gaming" xlink:to="lab_gaming"/>
+    <link:loc xlink:type="locator" xlink:label="loc_service" xlink:href="https://xbrl.fasb.org/us-gaap/2025/elts/us-gaap-2025.xsd#us-gaap_ServiceMember"/>
+    <link:label xlink:type="resource" xlink:label="lab_service" xlink:role="http://www.xbrl.org/2003/role/terseLabel" xml:lang="en-US">Services</link:label>
+    <link:labelArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label" xlink:from="loc_service" xlink:to="lab_service"/>
+    <link:loc xlink:type="locator" xlink:label="loc_legacy" xlink:href="exmp-20260131.xsd#exmp_DiscontinuedLegacyMember"/>
+    <link:label xlink:type="resource" xlink:label="lab_legacy" xlink:role="http://www.xbrl.org/2003/role/terseLabel" xml:lang="en-US">Legacy Devices</link:label>
+    <link:labelArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label" xlink:from="loc_legacy" xlink:to="lab_legacy"/>
+    <link:loc xlink:type="locator" xlink:label="loc_europe" xlink:href="exmp-20260131.xsd#exmp_EuropeMember"/>
+    <link:label xlink:type="resource" xlink:label="lab_europe" xlink:role="http://www.xbrl.org/2003/role/terseLabel" xml:lang="en-US">Europe</link:label>
+    <link:labelArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label" xlink:from="loc_europe" xlink:to="lab_europe"/>
+  </link:labelLink>
+</link:linkbase>

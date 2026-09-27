@@ -21,6 +21,7 @@ from industry_intelligence.db.models import (
     RankingEntry,
     RankingSnapshot,
 )
+from industry_intelligence.services.company_resolution import resolve_company_redirect
 
 DOMAIN_ORDER = {"computer": 0, "finance": 1, "gaming": 2}
 REGISTRY_ORDER = {key: index for index, key in enumerate(COMPANY_RANKINGS)}
@@ -379,7 +380,7 @@ def company_rankings(session, company_id, limit=50):
     absent right after an appearance is reported as ``dropped``.
     """
 
-    company = session.get(Company, company_id)
+    company = session.get(Company, resolve_company_redirect(session, company_id))
     if company is None:
         return None
     aliases = session.scalars(

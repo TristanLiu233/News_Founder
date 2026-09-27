@@ -1,0 +1,116 @@
+{
+ "meta": {
+  "goldenCopy": {
+   "publishDate": "2026-09-27T00:00:00Z"
+  }
+ },
+ "data": {
+  "type": "lei-records",
+  "id": "549300S4KLFTLO7GSQ80",
+  "attributes": {
+   "lei": "549300S4KLFTLO7GSQ80",
+   "entity": {
+    "legalName": {
+     "name": "NVIDIA CORPORATION",
+     "language": "en"
+    },
+    "otherNames": [],
+    "transliteratedOtherNames": [],
+    "legalAddress": {
+     "language": "en",
+     "addressLines": [
+      "C/O CORPORATION SERVICE COMPANY",
+      "251 LITTLE FALLS DRIVE"
+     ],
+     "addressNumber": null,
+     "addressNumberWithinBuilding": null,
+     "mailRouting": null,
+     "city": "WILMINGTON",
+     "region": "US-DE",
+     "country": "US",
+     "postalCode": "19808"
+    },
+    "headquartersAddress": {
+     "language": "en",
+     "addressLines": [
+      "2788 SAN TOMAS EXPRESSWAY"
+     ],
+     "addressNumber": null,
+     "addressNumberWithinBuilding": null,
+     "mailRouting": null,
+     "city": "SANTA CLARA",
+     "region": "US-CA",
+     "country": "US",
+     "postalCode": "95051"
+    },
+    "registeredAt": {
+     "id": "RA000602",
+     "other": null
+    },
+    "registeredAs": "2862596",
+    "jurisdiction": "US-DE",
+    "category": "GENERAL",
+    "legalForm": {
+     "id": "XTIQ",
+     "other": null
+    },
+    "associatedEntity": {
+     "lei": null,
+     "name": null
+    },
+    "status": "ACTIVE",
+    "expiration": {
+     "date": null,
+     "reason": null
+    },
+    "successorEntity": {
+     "lei": null,
+     "name": null
+    },
+    "successorEntities": [],
+    "creationDate": "1998-02-24T00:00:00Z",
+    "subCategory": null,
+    "otherAddresses": [],
+    "eventGroups": [
+     {
+      "groupType": "STANDALONE",
+      "events": [
+       {
+        "validationDocuments": "REGULATORY_FILING",
+        "effectiveDate": "2024-02-05T00:00:00Z",
+        "recordedDate": "2024-02-05T20:33:04Z",
+        "type": "CHANGE_HQ_ADDRESS",
+        "status": "COMPLETED"
+       }
+      ]
+     }
+    ]
+   },
+   "registration": {
+    "initialRegistrationDate": "2013-04-09T17:39:00Z",
+    "lastUpdateDate": "2026-01-07T01:29:18Z",
+    "status": "ISSUED",
+    "nextRenewalDate": "2027-02-06T17:45:00Z",
+    "managingLou": "5493001KJTIIGC8Y1R12",
+    "corroborationLevel": "FULLY_CORROBORATED",
+    "validatedAt": {
+     "id": "RA000602",
+     "other": null
+    },
+    "validatedAs": "2862596",
+    "otherValidationAuthorities": []
+   },
+   "bic": [
+    "NVDAUS6SXXX"
+   ],
+   "mic": null,
+   "ocid": "us_de/2862596",
+   "qcc": null,
+   "gem": "E100002024135",
+   "spglobal": [
+    "32307"
+   ],
+   "conformityFlag": "CONFORMING"
+  }
+ }
+}
