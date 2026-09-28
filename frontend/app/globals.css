@@ -103,7 +103,7 @@ details.secondary > summary { margin: 0; font-size: 1rem; }
 .chips li { padding: .3rem .6rem; border: 1px solid #d4d1c7; border-radius: 999px; background: #f8f7f2; font-size: .88rem; overflow-wrap: anywhere; }
 .chips small { color: #87908a; font-size: .7rem; }
 
-/* Let the six primary links wrap cleanly as the viewport narrows. */
+/* Let the seven primary links wrap cleanly as the viewport narrows. */
 @media (max-width: 52rem) {
   .header-inner { gap: 1rem; }
   .app-header nav a { padding: .4rem .5rem; }
@@ -185,4 +185,31 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
   .company-search .domain-tabs { display: flex; margin-left: 0; }
   .query-row { align-items: stretch; }
   .query-row button { padding-inline: 1rem; }
+}
+
+/* Events */
+.event-filters { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; padding: 1rem 1.25rem; }
+.event-filters .domain-tabs { display: inline-flex; margin: 0; }
+.event-filters .meta { flex-basis: 100%; }
+.event-type-filter { display: flex; align-items: center; gap: .5rem; font-size: .85rem; font-weight: 650; }
+.event-type-filter select { padding: .5rem; border: 1px solid #b8bdb5; border-radius: .3rem; background: #fff; }
+.event-list { display: grid; gap: .65rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+.event-list > li { padding: .9rem 1.1rem; border: 1px solid #d4d1c7; border-radius: .65rem; background: #fff; }
+.ranking-card .event-list > li { padding: .75rem 0; border: 0; border-bottom: 1px solid #efede7; border-radius: 0; }
+.ranking-card .event-list > li:last-child { border-bottom: 0; }
+.event-title { color: #17201c; font-weight: 700; text-decoration: none; overflow-wrap: anywhere; }
+.event-title:hover { color: #087f5b; text-decoration: underline; }
+.event-list .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; font-size: .8rem; }
+.event-sources { margin: .25rem 0 0; color: #87908a; font-size: .76rem; }
+.event-entities { margin-top: .5rem; }
+.event-entities li { padding: .15rem .5rem; font-size: .8rem; }
+.event-timeline { margin: 0; padding: 0; list-style: none; }
+.event-timeline li { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: .75rem; padding: .75rem 0; border-bottom: 1px solid #efede7; }
+.event-timeline li:last-child { border-bottom: 0; }
+.event-timeline time { color: #626861; font-size: .82rem; font-variant-numeric: tabular-nums; }
+.event-timeline a { color: #17201c; font-weight: 650; text-decoration: none; overflow-wrap: anywhere; }
+.event-timeline a:hover { color: #087f5b; text-decoration: underline; }
+@media (max-width: 42rem) {
+  .event-timeline li { grid-template-columns: minmax(0, 1fr); gap: .25rem; }
+  .event-filters { padding: 1rem; }
 }

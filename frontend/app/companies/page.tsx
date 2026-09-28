@@ -40,7 +40,7 @@ export default function Companies() {
   return <main><div className="shell"><p className="eyebrow">{t.eyebrow}</p><h1>{t.title}</h1><p className="intro">{t.intro}</p>
     <form className="search-form company-search" onSubmit={submit}><label htmlFor="company-query">{t.search}</label><div className="query-row"><input id="company-query" value={query} placeholder={t.placeholder} onChange={event => setQuery(event.target.value)}/><button type="submit">{t.submit}</button></div>
       <button className="domain-reset" type="button" aria-pressed={!view?.domain} onClick={() => view && navigate({...view, domain: undefined, offset: 0})}>{t.all}</button>
-      {view && <DomainTabs value={view.domain ?? "computer"} onChange={domain => navigate({...view, domain, offset: 0})} locale={locale} label={(domain, active) => common[active].shortDomains[domain]}/>} 
+      {view && <DomainTabs value={view.domain} onChange={domain => navigate({...view, domain, offset: 0})} locale={locale} label={(domain, active) => common[active].shortDomains[domain]}/>} 
     </form>
     <PageState loading={!page && !error} error={error} locale={locale}/>
     {page && <><p className="result-count">{t.showing(from, to, page.total)}</p>{page.items.length === 0 ? <p className="notice">{t.empty}</p> : <ul className="company-directory">{page.items.map(company => <li key={company.id}>

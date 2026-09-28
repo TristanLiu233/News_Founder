@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { ExternalLink, NewsList, PageState, TrendBadge, trendingDomainLabel } from "../../../components/shared";
+import { ExternalLink, NewsList, PageState, RelatedEvents, TrendBadge, trendingDomainLabel } from "../../../components/shared";
 import {
   ApiError, fetchNews, fetchSubject, fetchSubjectHistory,
   type NewsItem, type RankHistoryPoint, type SourceAppearance, type SubjectDetail, type SubjectHistory,
@@ -209,6 +209,7 @@ export default function SubjectPage() {
       <RankHistorySection subjectId={detail.subject_id} locale={locale}/>
       <SourceAppearances detail={detail} locale={locale}/>
       <RelatedNews subjectId={detail.subject_id} total={detail.related_news_count} locale={locale}/>
+      <RelatedEvents filter={{subject_id: detail.subject_id}} locale={locale}/>
       <Aliases detail={detail} locale={locale}/>
     </>}
   </div></main>;

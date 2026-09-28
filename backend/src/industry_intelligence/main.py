@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from industry_intelligence.api.companies import router as companies_router
 from industry_intelligence.api.company_rankings import router as company_rankings_router
+from industry_intelligence.api.events import router as events_router
 from industry_intelligence.api.health import router as health_router
 from industry_intelligence.api.news import router as news_router
 from industry_intelligence.api.search import router as search_router
@@ -60,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(subjects_router)
     app.include_router(company_rankings_router)
     app.include_router(companies_router)
+    app.include_router(events_router)
 
     @app.exception_handler(Exception)
     async def internal_error_handler(_: Request, exc: Exception) -> JSONResponse:

@@ -1,6 +1,6 @@
 # Industry Intelligence & Ranking Platform
 
-The platform collects twelve public rankings plus four finance news/feed sources. It preserves source-native history, resolves ranked entries to auditable canonical subjects, and keeps chronological news separate from market rankings. Phase 4 adds an External Company Ranking Tracker that stores publisher company rankings as immutable snapshots with conservative company identity. The UI supports English and 简体中文; the selected locale is stored in browser `localStorage`.
+The platform collects twelve public rankings plus four finance news/feed sources. It preserves source-native history, resolves ranked entries to auditable canonical subjects, and keeps chronological news separate from market rankings. Phase 4 adds an External Company Ranking Tracker that stores publisher company rankings as immutable snapshots with conservative company identity; Phase 5 adds sourced Company Profiles; Phase 6 groups existing news/feed items into canonical Events with deterministic, auditable rules. The UI supports English and 简体中文; the selected locale is stored in browser `localStorage`.
 
 ## Sources
 
@@ -116,10 +116,12 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 | `/today` | Source-native lists, one domain tab at a time; Finance shows Latest News first and Market Pulse in a collapsed secondary section | 5 per source, View More |
 | `/trending` | Cross-source composite attention per domain; Finance is labelled Market Pulse | Top 20, expandable to 50 |
 | `/search` | Multilingual canonical search; the source filter is built from `/api/v1/sources` (`searchable` keys) | 20 per page |
-| `/subject/{id}` | Subject Detail: current rank, rank history, source appearances, related news, aliases | 20 lists, 10 news per page |
+| `/subject/{id}` | Subject Detail: current rank, rank history, source appearances, related news, related Events, aliases | 20 lists, 10 news per page, 5 related Events |
 | `/rankings` | External company rankings per domain: ranking selector, latest snapshot table with movement, dropped entries, company names linking to Company Detail, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
 | `/companies` | Company directory with company search (names, aliases, legal/localized names, identifiers), domain filter, and profile availability; separate from Subject search | 30 per page, previous/next |
-| `/company/{id}` | Company Detail: identity, sourced profile facts with provenance, external rankings and history, related news via linked Subjects, deterministic Subject links | Up to 10 related news |
+| `/company/{id}` | Company Detail: identity, sourced profile facts with provenance, external rankings and history, related news via linked Subjects, related Events, deterministic Subject links | Up to 10 related news, 5 related Events |
+| `/events` | Canonical Events grouped from existing news/feed items: domain and event-type filters, latest-report order, report and source counts, Subject/Company links (`?domain=&type=&subject_id=&company_id=&offset=`) | 20 per page, previous/next |
+| `/event/{id}` | Event Detail: first/last report time, event type, coverage by source and language, related Subjects and Companies, timeline of reports linking to the original articles (redirect-aware) | 10 reports per page, View More |
 
 Header navigation is shared across pages. URLs are locale-independent; the locale stays in `localStorage`. Subject names in Trending and Search open the internal Subject Detail page; news titles and source titles open the original external URL in a new tab. Pages only read persisted data: no page load triggers ingestion, ranking, reindexing, embeddings, or LLM calls. The legacy `/?view=trending` URL redirects to `/trending`.
 
@@ -417,3 +419,59 @@ schema-embedded label links. XBRL member tags remain filer-defined and are label
 reported business/segment or product/service members, not asserted to be official divisions;
 some filers tag reconciling or non-segment items on these axes (for example an HSBC lending
 member and Sony's elimination/"All Other" members), and no filer-specific filter is applied.
+
+## Phase 6 — Event Integration
+
+Events are evidence-backed clusters of existing ContentItems. An Event is one concrete,
+time-bounded real-world occurrence ("what happened"); a Subject is who or what it concerns, and a
+ContentItem is one report of it. Events are built by deterministic, auditable rules from persisted
+news/feed items only; no LLM, embedding, AI summary, score, or prediction is involved, and page
+loads never build Events. Events are separate from Today, Trending, Search, Rankings, and
+Companies: they never feed Trending or Search, and `source_count` is coverage, not importance.
+
+```bash
+# Incremental: assigns only content items that have no Event yet (repeatable, idempotent)
+python -m industry_intelligence.cli event-build
+# Preview without writing, or bound a run
+python -m industry_intelligence.cli event-build --dry-run
+python -m industry_intelligence.cli event-build --since 2026-09-27T00:00Z --limit 200
+# Rebuild derived Event ↔ Subject/Company links after content-relink or company-subject-link
+python -m industry_intelligence.cli event-relink
+# Explicit reviewed merge with a redirect; unsafe merges are refused
+python -m industry_intelligence.cli event-merge CANONICAL_UUID DUPLICATE_UUID --reason "review evidence"
+```
+
+Grouping is conservative: a duplicate Event is preferred to a wrong merge. Inside one domain and a
+24-hour publication window, a report joins an Event only with identity evidence plus headline
+evidence and no conflict:
+
+- `exact_headline`: identical normalized headline (NFKC, case, punctuation, the leading
+  `【headline】` of feed titles, and a short list of feed prefixes such as `市场消息：` removed);
+- `attribution_headline`: the same Chinese issuer/speaker prefix before `：` and a similar
+  statement (character-bigram/word Dice ≥ 0.6);
+- `shared_entity_headline`: a shared Subject or Company from existing deterministic links and a
+  similar headline (Dice ≥ 0.7).
+
+Different specific event types, disjoint Subjects or Companies, different issuer prefixes, or
+conflicting numbers block a merge; two items from one source merge only on an exact headline;
+title similarity or time alone never merges, and a report that matches two Events starts a new
+one. Event types (earnings, product launch, acquisition, funding, regulatory, leadership,
+partnership, security incident, game release) are assigned only when one keyword family matches;
+otherwise `general`. The canonical title is a representative source headline kept verbatim
+(boilerplate-free first, then earliest). Event times are content publication times, not verified
+occurrence times. Event ↔ Subject links come only from existing content-subject links, and
+Event ↔ Company links only through those subjects' company links.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/v1/events?domain=&subject_id=&company_id=&event_type=&from=&to=&limit=&offset=` | Canonical Events, most recently reported first (20 default, 100 max) |
+| GET | `/api/v1/events/{id}` | Event Detail with entities, coverage, time basis, and a 5-report preview (redirect-aware) |
+| GET | `/api/v1/events/{id}/content?limit=&offset=&order=` | The Event's reports with original URLs (10 default, 50 max) |
+
+Live coverage on 2026-09-28: the live content corpus is Finance-only (105 items from CNBC,
+Nasdaq, 东方财富, 新浪财经), so all 92 live Events are Finance; Computer and Gaming have no content
+and therefore no Events. 13 Events have two reports (all 东方财富 + 新浪财经), 79 have one. A
+manual audit of 35 Events found no wrong merge. Live content has no deterministic subject links,
+so live Events have no Subject or Company relation yet; those paths are covered by PostgreSQL tests
+and a disposable preview database, not by live data.
+

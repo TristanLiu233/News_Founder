@@ -404,3 +404,59 @@ export function fetchCompanies(
 export function fetchCompany(id: string, signal?: AbortSignal): Promise<CompanyDetail> {
   return getJson(`/api/v1/companies/${encodeURIComponent(id)}`, {}, signal);
 }
+
+/** Phase 6 Events: evidence-backed clusters of persisted news/feed items. */
+export type EventType =
+  | "earnings" | "product_launch" | "acquisition" | "funding" | "regulatory"
+  | "leadership" | "partnership" | "security_incident" | "game_release" | "general";
+export interface EventTime {
+  /** Always "content_publication": times are when sources published, not verified occurrence times. */
+  basis: "content_publication";
+  first_published_at: string; last_published_at: string;
+  first_observed_at: string; last_observed_at: string;
+}
+export interface EventSubjectRef {
+  id: string; canonical_name: string; display_names: DisplayNames; domain: Domain;
+  subject_type: string; content_count: number; strategy: string;
+}
+export interface EventCompanyRef {
+  id: string; canonical_name: string; display_names: DisplayNames; content_count: number; strategy: string;
+}
+export interface EventSummary {
+  id: string; canonical_title: string; title_language: string; domain: Domain; event_type: EventType;
+  time: EventTime; content_count: number; source_count: number;
+  sources: {name: string; content_count: number}[];
+  languages: {language: string; content_count: number}[];
+  subjects: EventSubjectRef[]; subject_count: number;
+  companies: EventCompanyRef[]; company_count: number;
+}
+export interface EventsPage { items: EventSummary[]; total: number; limit: number; offset: number; }
+export interface EventContentItem {
+  id: string; title: string; url: string; source: string; content_type: "news" | "feed";
+  language: string; published_at: string | null; observed_at: string;
+  link_strategy: string; link_confidence: string;
+}
+export interface EventDetail extends EventSummary {
+  requested_id: string; redirected: boolean; representative_content_id: string | null;
+  content_preview: EventContentItem[];
+}
+export interface EventContentPage {
+  event_id: string; items: EventContentItem[]; total: number; limit: number; offset: number; order: "asc" | "desc";
+}
+
+export function fetchEvents(
+  options: {domain?: Domain; event_type?: EventType; subject_id?: string; company_id?: string; limit?: number; offset?: number},
+  signal?: AbortSignal,
+): Promise<EventsPage> {
+  return getJson("/api/v1/events", options, signal);
+}
+
+export function fetchEvent(id: string, signal?: AbortSignal): Promise<EventDetail> {
+  return getJson(`/api/v1/events/${encodeURIComponent(id)}`, {}, signal);
+}
+
+export function fetchEventContent(
+  id: string, options: {limit?: number; offset?: number; order?: "asc" | "desc"}, signal?: AbortSignal,
+): Promise<EventContentPage> {
+  return getJson(`/api/v1/events/${encodeURIComponent(id)}/content`, options, signal);
+}

@@ -12,6 +12,7 @@ const links = [
   {href: "/search", key: "search"},
   {href: "/rankings", key: "rankings"},
   {href: "/companies", key: "companies"},
+  {href: "/events", key: "events"},
 ] as const;
 
 export function AppHeader() {

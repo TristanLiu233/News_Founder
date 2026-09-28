@@ -8,6 +8,13 @@ from industry_intelligence.db.models.company_profile import (
     CompanySubjectLink,
 )
 from industry_intelligence.db.models.content import ContentItem, ContentSubjectLink
+from industry_intelligence.db.models.event import (
+    Event,
+    EventCompanyLink,
+    EventContentLink,
+    EventRedirect,
+    EventSubjectLink,
+)
 from industry_intelligence.db.models.rank_list import RankList
 from industry_intelligence.db.models.rank_observation import RankObservation
 from industry_intelligence.db.models.ranking import Ranking
@@ -25,6 +32,11 @@ __all__ = [
     "CompanySubjectLink",
     "ContentItem",
     "ContentSubjectLink",
+    "Event",
+    "EventCompanyLink",
+    "EventContentLink",
+    "EventRedirect",
+    "EventSubjectLink",
     "RankList",
     "RankObservation",
     "Ranking",

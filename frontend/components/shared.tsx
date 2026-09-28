@@ -1,8 +1,9 @@
 "use client";
 
-import type { ReactNode } from "react";
+import Link from "next/link";
+import { useEffect, useState, type ReactNode } from "react";
 
-import type { Domain, NewsItem, Trend } from "../lib/api";
+import { fetchEvents, type Domain, type EventSummary, type EventsPage, type NewsItem, type Trend } from "../lib/api";
 import { common, formatDateTime, type Locale } from "../lib/i18n";
 
 export const DOMAINS: Domain[] = ["computer", "finance", "gaming"];
@@ -31,7 +32,8 @@ export function trendingDomainLabel(domain: Domain, locale: Locale) {
 }
 
 export function DomainTabs({ value, onChange, locale, label = trendingDomainLabel }: {
-  value: Domain; onChange: (domain: Domain) => void; locale: Locale;
+  /** Undefined when no domain is selected (an "All" control is pressed instead). */
+  value?: Domain; onChange: (domain: Domain) => void; locale: Locale;
   label?: (domain: Domain, locale: Locale) => string;
 }) {
   return <div className="domain-tabs" role="group" aria-label={common[locale].domainFilter}>
@@ -51,4 +53,52 @@ export function PageState({ loading, error, locale }: { loading: boolean; error?
   if (error) return <p role="alert" className="notice error">{common[locale].unavailable} <small>{error}</small></p>;
   if (loading) return <p className="notice" aria-live="polite">{common[locale].loading}</p>;
   return null;
+}
+
+/** Canonical Events as compact rows: title, latest-report time (the list order), coverage, type, and a few entities. */
+export function EventList({ items, locale, showDomain = false }: { items: EventSummary[]; locale: Locale; showDomain?: boolean }) {
+  const t = common[locale];
+  return <ul className="event-list">{items.map(event => <li key={event.id}>
+    <Link className="event-title" href={`/event/${event.id}`} lang={event.title_language}>{event.canonical_title}</Link>
+    <p className="meta">
+      <span>{t.lastReported} <time dateTime={event.time.last_published_at}>{formatDateTime(event.time.last_published_at, locale)}</time></span>
+      {showDomain && <span>{t.shortDomains[event.domain]}</span>}
+      <span>{t.reports(event.content_count)}</span>
+      <span>{t.sources(event.source_count)}</span>
+      {event.event_type !== "general" && <span className="tag">{t.eventTypes[event.event_type] ?? event.event_type}</span>}
+    </p>
+    <p className="event-sources">{event.sources.map(source => source.name).join(" · ")}{event.source_count > event.sources.length && " …"}</p>
+    {(event.subjects.length > 0 || event.companies.length > 0) && <ul className="chips event-entities">
+      {event.subjects.map(subject => <li key={`s-${subject.id}`}><Link href={`/subject/${subject.id}`}>{subject.display_names[locale]}</Link> <small>{t.subjectTag}</small></li>)}
+      {event.companies.map(company => <li key={`c-${company.id}`}><Link href={`/company/${company.id}`}>{company.display_names[locale]}</Link> <small>{t.companyTag}</small></li>)}
+    </ul>}
+  </li>)}</ul>;
+}
+
+const RELATED_EVENTS = 5;
+
+/** Up to five recent Events related to one Subject or Company through deterministic links. */
+export function RelatedEvents({ filter, locale }: { filter: {subject_id: string} | {company_id: string}; locale: Locale }) {
+  const [page, setPage] = useState<EventsPage>();
+  const [failed, setFailed] = useState(false);
+  const key = "subject_id" in filter ? `subject_id=${filter.subject_id}` : `company_id=${filter.company_id}`;
+  useEffect(() => {
+    const controller = new AbortController();
+    setPage(undefined); setFailed(false);
+    const [name, value] = key.split("=");
+    fetchEvents({[name]: value, limit: RELATED_EVENTS}, controller.signal)
+      .then(setPage)
+      .catch(() => { if (!controller.signal.aborted) setFailed(true); });
+    return () => controller.abort();
+  }, [key]);
+  const t = common[locale];
+  return <section className="detail-section" aria-labelledby="related-events"><h2 id="related-events" className="section-title">{t.relatedEvents}{page && page.total > 0 && ` (${page.total})`}</h2>
+    <article className="ranking-card">
+      {failed && <p className="empty">{t.unavailable}</p>}
+      {!page && !failed && <p className="empty">{t.loading}</p>}
+      {page?.items.length === 0 && <p className="empty">{t.noRelatedEvents}</p>}
+      {page && page.items.length > 0 && <><p className="section-note">{t.relatedEventsNote}</p><EventList items={page.items} locale={locale}/></>}
+      {page && page.total > page.items.length && <Link href={`/events?${key}`}>{t.viewAllEvents(page.total)} →</Link>}
+    </article>
+  </section>;
 }

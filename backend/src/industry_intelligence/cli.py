@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import json
+from datetime import datetime
 from uuid import UUID
 
 from industry_intelligence.adapters.company_profile.registry import PROFILE_SOURCES
@@ -17,6 +18,13 @@ from industry_intelligence.logging import configure_logging
 from industry_intelligence.services.ranking import rank_domain
 from industry_intelligence.services.resolution import backfill_subject_identities
 from industry_intelligence.services.source_ingestion import ingest, ingest_all_enabled_sources
+
+
+def _aware_datetime(value):
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise argparse.ArgumentTypeError("--since needs a timezone offset, e.g. 2026-09-27T00:00Z")
+    return parsed
 
 
 def main():
@@ -51,6 +59,17 @@ def main():
     merge.add_argument("canonical", type=UUID)
     merge.add_argument("duplicate", type=UUID)
     merge.add_argument("--reason", required=True)
+    events = sub.add_parser("event-build")
+    # Incremental: only content items without an Event link are processed.
+    events.add_argument("--since", type=_aware_datetime)
+    events.add_argument("--limit", type=int)
+    events.add_argument("--dry-run", action="store_true")
+    sub.add_parser("event-relink")
+    event_merge = sub.add_parser("event-merge")
+    # A reviewed, explicit merge of one duplicate Event into its canonical Event.
+    event_merge.add_argument("canonical", type=UUID)
+    event_merge.add_argument("duplicate", type=UUID)
+    event_merge.add_argument("--reason", required=True)
     args = parser.parse_args()
     settings = get_settings()
     configure_logging(settings)
@@ -117,6 +136,32 @@ def main():
 
             with factory.begin() as session:
                 result = merge_companies(session, args.canonical, args.duplicate, args.reason)
+        elif args.command == "event-build":
+            from industry_intelligence.services.event_ingestion import (
+                build_events,
+                preview_clusters,
+            )
+
+            session = factory()
+            try:
+                result = build_events(session, args.since, args.limit)
+                if args.dry_run:
+                    result = {"dry_run": True, **result, "clusters": preview_clusters(session)}
+                    session.rollback()
+                else:
+                    session.commit()
+            finally:
+                session.close()
+        elif args.command == "event-relink":
+            from industry_intelligence.services.event_ingestion import relink_all_events
+
+            with factory.begin() as session:
+                result = relink_all_events(session)
+        elif args.command == "event-merge":
+            from industry_intelligence.services.event_merge import merge_events
+
+            with factory.begin() as session:
+                result = merge_events(session, args.canonical, args.duplicate, args.reason)
         elif args.command in {"ingest-content", "ingest-content-all"}:
             from industry_intelligence.services.content_ingestion import (
                 ingest_all_content,
@@ -134,7 +179,7 @@ def main():
                 if args.command == "ingest"
                 else ingest_all_enabled_sources(settings, factory)
             )
-        print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
         if isinstance(result, list) and any("error" in item for item in result):
             raise SystemExit(1)
     finally:

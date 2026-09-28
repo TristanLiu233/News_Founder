@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { ExternalLink, NewsList, PageState } from "../../../components/shared";
+import { ExternalLink, NewsList, PageState, RelatedEvents } from "../../../components/shared";
 import { ApiError, fetchCompany, fetchNews, type CompanyDetail, type NewsPage } from "../../../lib/api";
 import { formatDateTime, useLocale } from "../../../lib/i18n";
 
@@ -34,6 +34,7 @@ export default function CompanyPage() {
     {p?.key_products.length ? <section className="detail-section"><h2 className="section-title">{t.products}</h2><div className="ranking-card"><Chips items={p.key_products}/></div></section> : null}
     <section className="detail-section"><h2 className="section-title">{t.rankings}</h2><p className="section-note">{t.rankingsNote}</p>{company.current_rankings.length === 0 ? <p className="empty">{t.noRankings}</p> : <div className="card-grid">{company.current_rankings.map(item => <article className="ranking-card compact" key={item.ranking.key}><h3 lang={item.ranking.primary_language}>{item.ranking.name}</h3><p>{item.ranking.publisher} · {item.latest_rank ? `#${item.latest_rank}` : "—"}</p><Link href={`/rankings?domain=${item.ranking.domain}&ranking=${item.ranking.key}`}>{t.history}</Link></article>)}</div>}</section>
     <section className="detail-section"><h2 className="section-title">{t.relatedNews}</h2>{!news ? <PageState loading locale={locale}/> : news.items.length ? <div className="ranking-card"><NewsList items={news.items} locale={locale}/></div> : <p className="empty">{t.noNews}</p>}</section>
+    <RelatedEvents filter={{company_id: company.id}} locale={locale}/>
     <section className="detail-section"><h2 className="section-title">{t.relatedSubject}</h2>{company.related_subjects.length ? <ul className="chips">{company.related_subjects.map(subject => <li key={subject.id}><Link href={`/subject/${subject.id}`}>{subject.title}</Link></li>)}</ul> : <p className="empty">{t.noSubject}</p>}</section>
     <section className="detail-section"><h2 className="section-title">{t.sources}</h2>{company.profile_sources.length === 0 ? <p className="empty">{t.noProfile}</p> : <div className="card-grid">{company.profile_sources.map(source => <article className="ranking-card compact" key={source.source_key}><h3>{source.source_name}</h3><p className="meta">{t.checked}: {formatDateTime(source.checked_at, locale)}</p>{source.used_fields.length > 0 && <p>{t.sourceFields}: {source.used_fields.join(", ")}</p>}<ExternalLink href={source.source_url} locale={locale}>{new URL(source.source_url).hostname}</ExternalLink></article>)}</div>}</section>
   </>}</div></main>;

@@ -24,6 +24,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ../.venv/bin/pytest tests/unit/test_search.py
 ../.venv/bin/pytest tests/unit/test_phase2.py::test_rrf_and_freshness_exact_math
 
+# backend/ — Events from persisted content (incremental; --dry-run rolls back)
+../.venv/bin/python -m industry_intelligence.cli event-build --dry-run
+../.venv/bin/python -m industry_intelligence.cli event-build
+
 # backend/ — external company rankings (current published versions only)
 ../.venv/bin/python -m industry_intelligence.cli company-ranking-ingest cmc_tech_market_cap
 ../.venv/bin/python -m industry_intelligence.cli company-ranking-ingest-all
@@ -58,11 +62,13 @@ Tests marked `integration` (`tests/integration/`) connect to the database from t
 
 **Company profiles (Phase 5)** enrich reviewed targets only. `adapters/company_profile/targets.py` → `PROFILE_TARGETS` (reviewed symbol → CIK/LEI/website/CompaniesMarketCap slug/official Chinese-name pages) and `registry.py` → `PROFILE_SOURCES` (`official_website`, `sec_edgar`, `gleif`, `companiesmarketcap`). Adapters are `Adapter(http, definition)` with `async fetch(target)` returning `ExternalCompanyProfile`. `services/company_profile_ingestion.persist_profile_source()` runs in the caller's transaction: it attaches identities conservatively, records names as aliases, upserts one record per (company, source) by content hash (identical content only refreshes `checked_at`), and rebuilds `CompanyProfile` by `FIELD_PRIORITY` with `field_sources`. `services/company_subject_linking.relink_all_companies()` rebuilds deterministic links (exchange code, then unique exact name). `services/company_merge.merge_companies()` is an explicit reviewed merge with redirects. `api/companies.py` serves `/companies` and `/companies/{id}`; `/news?company_id=` reuses the news tables. SEC requires `SEC_CONTACT`.
 
+**Events (Phase 6)** group persisted `ContentItem`s into canonical `Event`s; they are not Subjects and never feed Trending or Search. `services/event_resolution.py` holds the pure, unit-tested matching rules (normalization, identity evidence, conflicts, thresholds, `RESOLVER_VERSION`); `services/event_ingestion.build_events()` (caller's transaction, advisory lock `events`) assigns only content items without an `EventContentLink`, so re-runs are no-ops, and rebuilds derived `EventSubjectLink`/`EventCompanyLink` rows from existing content-subject and company-subject links; `services/event_merge.merge_events()` is the reviewed merge with `EventRedirect`; `services/events.py` is the read model for `api/events.py`. `event-build` is not run automatically after `ingest-content`, and `event-relink` must follow `content-relink` or `company-subject-link`. Changing matching rules does not re-group already processed content (there is no rebuild command). Integration tests that call `build_events` must pass `content_ids=` and use timestamps far from the live corpus, or live content becomes a candidate.
+
 **Placeholders for future phases, not active code paths:** `ai/gateway.py` (`AIGateway` protocol; no phase uses LLMs yet).
 
 ## Frontend architecture (`frontend/`)
 
-- All pages are client components: `app/page.tsx` (Home), `app/today`, `app/trending`, `app/search`, `app/rankings`, `app/companies`, `app/company/[id]`, and `app/subject/[id]`. Query state (`?domain=`, search params) is read from `window.location` in effects and written with `history.pushState`, which avoids `useSearchParams` Suspense requirements during `next build`.
+- All pages are client components: `app/page.tsx` (Home), `app/today`, `app/trending`, `app/search`, `app/rankings`, `app/companies`, `app/company/[id]`, `app/events`, `app/event/[id]`, and `app/subject/[id]`. `components/shared.tsx` also holds `EventList` and `RelatedEvents` (used by Subject and Company Detail). Query state (`?domain=`, search params) is read from `window.location` in effects and written with `history.pushState`, which avoids `useSearchParams` Suspense requirements during `next build`.
 - `app/layout.tsx` wraps pages in `LocaleProvider` (`lib/i18n.tsx`; `useLocale()`, locale stored in `localStorage` under `locale`) and the shared `AppHeader`. Reusable UI lives in `components/shared.tsx`.
 - UI strings live in `common` (`lib/i18n.tsx`) for shared components and in a per-page dictionary (`copy` or `labels`) keyed by `en` and `zh-CN`. Any new string needs both entries.
 - `lib/api.ts` holds hand-written TypeScript types that mirror backend response shapes, plus fetch helpers built on `NEXT_PUBLIC_API_BASE_URL`. Update these types whenever an API response changes.
