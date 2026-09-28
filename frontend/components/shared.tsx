@@ -120,8 +120,11 @@ export function EventList({ items, locale, showDomain = false, compact = false }
 
 const RELATED_EVENTS = 5;
 
-/** Up to five recent Events related to one Subject or Company through deterministic links. */
-export function RelatedEvents({ filter, locale }: { filter: {subject_id: string} | {company_id: string}; locale: Locale }) {
+/**
+ * Up to five recent Events related to one Topic (Subject) or Company. With `hideWhenEmpty`, the whole
+ * section is left out when nothing is related, so sparse detail pages are not padded with empty cards.
+ */
+export function RelatedEvents({ filter, locale, hideWhenEmpty = false }: { filter: {subject_id: string} | {company_id: string}; locale: Locale; hideWhenEmpty?: boolean }) {
   const [page, setPage] = useState<EventsPage>();
   const [failed, setFailed] = useState(false);
   const key = "subject_id" in filter ? `subject_id=${filter.subject_id}` : `company_id=${filter.company_id}`;
@@ -135,12 +138,13 @@ export function RelatedEvents({ filter, locale }: { filter: {subject_id: string}
     return () => controller.abort();
   }, [key]);
   const t = common[locale];
+  if (hideWhenEmpty && (failed || !page || page.items.length === 0)) return null;
   return <section className="detail-section" aria-labelledby="related-events"><h2 id="related-events" className="section-title">{t.relatedEvents}{page && page.total > 0 && ` (${page.total})`}</h2>
     <article className="ranking-card">
       {failed && <p className="empty">{t.unavailable}</p>}
       {!page && !failed && <p className="empty">{t.loading}</p>}
       {page?.items.length === 0 && <p className="empty">{t.noRelatedEvents}</p>}
-      {page && page.items.length > 0 && <><p className="section-note">{t.relatedEventsNote}</p><EventList items={page.items} locale={locale}/></>}
+      {page && page.items.length > 0 && <EventList items={page.items} locale={locale}/>}
       {page && page.total > page.items.length && <Link href={`/events?${key}`}>{t.viewAllEvents(page.total)} →</Link>}
     </article>
   </section>;

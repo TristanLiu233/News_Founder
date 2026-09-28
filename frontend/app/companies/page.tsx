@@ -9,8 +9,8 @@ import { common, useLocale } from "../../lib/i18n";
 
 const LIMIT = 30;
 const copy = {
-  en: {eyebrow: "Company intelligence", title: "Companies", intro: "Find ranked companies by canonical, legal, localized or source-published name. Company search is separate from Subject search.", search: "Search companies", placeholder: "Company, alias, ticker, CIK or LEI", submit: "Search", all: "All domains", profile: "Profile available", limited: "Ranking identity only", rankings: "Current rankings", showing: (from: number, to: number, total: number) => `Showing ${from}–${to} of ${total}`, empty: "No companies match these filters.", previous: "Previous", next: "Next"},
-  "zh-CN": {eyebrow: "公司情报", title: "公司", intro: "按标准名称、法定名称、本地化名称或来源名称查找已上榜公司。公司搜索与 Subject 搜索互相独立。", search: "搜索公司", placeholder: "公司、别名、股票代码、CIK 或 LEI", submit: "搜索", all: "全部领域", profile: "已有公司资料", limited: "仅排行榜身份", rankings: "当前榜单", showing: (from: number, to: number, total: number) => `显示 ${from}–${to} / ${total}`, empty: "没有符合条件的公司。", previous: "上一页", next: "下一页"},
+  en: {eyebrow: "Company intelligence", title: "Companies", intro: "Find companies that appear in external rankings by name, ticker, or registry identifier.", search: "Search companies", placeholder: "Company, alias, ticker, CIK or LEI", submit: "Search", all: "All domains", profile: "Profile available", limited: "Rankings only", rankings: "Current rankings", showing: (from: number, to: number, total: number) => `Showing ${from}–${to} of ${total}`, empty: "No companies match these filters.", previous: "Previous", next: "Next"},
+  "zh-CN": {eyebrow: "公司情报", title: "公司", intro: "按名称、股票代码或注册标识查找出现在外部排行榜中的公司。", search: "搜索公司", placeholder: "公司、别名、股票代码、CIK 或 LEI", submit: "搜索", all: "全部领域", profile: "已有公司资料", limited: "仅有排行榜信息", rankings: "当前榜单", showing: (from: number, to: number, total: number) => `显示 ${from}–${to} / ${total}`, empty: "没有符合条件的公司。", previous: "上一页", next: "下一页"},
 } as const;
 
 type View = {q: string; domain?: Domain; offset: number};

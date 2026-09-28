@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { ExternalLink, NewsList, PageState, RelatedEvents, TrendBadge, trendingDomainLabel } from "../../../components/shared";
+import { ExternalLink, InfoNote, NewsList, PageState, RelatedEvents, TrendBadge, trendingDomainLabel } from "../../../components/shared";
 import {
   ApiError, fetchNews, fetchSubject, fetchSubjectHistory,
   type NewsItem, type RankHistoryPoint, type SourceAppearance, type SubjectDetail, type SubjectHistory,
@@ -16,8 +16,8 @@ const HISTORY_PREVIEW = 10;
 const NEWS_PAGE = 10;
 
 const copy = {
-  en: {eyebrow: "Subject", overview: "Overview", canonicalName: "Canonical name", subjectType: "Type", observations: "Observations", latestObserved: "Latest observation", sourceLists: "Source lists", currentRank: "Current Rank", notRanked: "Not Currently Ranked", notRankedNote: "This subject is not in the latest composite ranking for its domain.", viewTrending: "View in Trending", calculated: "Calculated", previousRank: "Previous rank", score: "score", rankHistory: "Rank History", noHistory: "No ranking history yet.", historyNote: (shown: number, total: number) => `Latest ${shown} of ${total} successful composite runs that ranked this subject.`, chartLabel: (count: number, best: number, worst: number) => `Composite rank over the last ${count} runs, best #${best}, worst #${worst}. Higher on the chart is a better rank.`, best: "Best", worst: "Worst", date: "Calculated", rank: "Rank", sources: "Sources", sourceAppearances: "Source Appearances", sourceNote: "Latest observation in each source-native list where this subject has appeared.", currentSnapshot: "Current snapshot", lastSeen: "Last seen", firstSeen: "first seen", appearances: (count: number) => `${count} ${count === 1 ? "observation" : "observations"}`, bestRank: "best", noAppearances: "No source appearances recorded.", moreAppearances: (shown: number, total: number) => `Showing ${shown} of ${total} lists.`, relatedNews: "Related News", noRelatedNews: "No related news yet.", relatedNote: "Only deterministic links: the same article, an exact unique name or alias, an exchange code, or a cashtag.", aliases: "Aliases", noAliases: "No aliases recorded.", aliasGroups: {en: "English", "zh-CN": "Chinese", other: "Other"} as Record<string, string>, aliasTypes: {official_name: "Official", localized_name: "Localized", source_name: "Source name"} as Record<string, string>, notFound: "Subject not found", notFoundNote: "No canonical subject or redirect exists for this ID.", searchArchive: "Search the archive", loadFailed: "Could not load this section.", marketPulse: "Market Pulse", subjectTypes: {event: "Event", company: "Company", stock: "Stock", game: "Game", repository: "Repository", paper: "Paper", model: "Model", technology: "Technology"} as Record<string, string>},
-  "zh-CN": {eyebrow: "主题", overview: "概览", canonicalName: "规范名称", subjectType: "类型", observations: "观测次数", latestObserved: "最近观测", sourceLists: "来源榜单", currentRank: "当前排名", notRanked: "当前未上榜", notRankedNote: "该主题不在所属领域的最新综合排名中。", viewTrending: "在综合趋势中查看", calculated: "计算于", previousRank: "上次排名", score: "分数", rankHistory: "排名历史", noHistory: "暂无排名历史。", historyNote: (shown: number, total: number) => `显示最近 ${shown} 次（共 ${total} 次）包含该主题的成功综合排名。`, chartLabel: (count: number, best: number, worst: number) => `最近 ${count} 次综合排名，最佳 #${best}，最差 #${worst}。图中越高代表排名越靠前。`, best: "最佳", worst: "最差", date: "计算时间", rank: "排名", sources: "来源数", sourceAppearances: "来源记录", sourceNote: "该主题在各来源原生榜单中的最新一次观测。", currentSnapshot: "当前快照", lastSeen: "最近出现", firstSeen: "首次出现", appearances: (count: number) => `${count} 次观测`, bestRank: "最佳", noAppearances: "暂无来源记录。", moreAppearances: (shown: number, total: number) => `显示 ${shown} / ${total} 个榜单。`, relatedNews: "相关新闻", noRelatedNews: "暂无相关新闻。", relatedNote: "仅包含确定性关联：同一篇文章、唯一的精确名称或别名、交易所代码或 $代码。", aliases: "别名", noAliases: "暂无别名记录。", aliasGroups: {en: "英文", "zh-CN": "中文", other: "其他"} as Record<string, string>, aliasTypes: {official_name: "官方名称", localized_name: "本地化名称", source_name: "来源名称"} as Record<string, string>, notFound: "未找到该对象", notFoundNote: "该 ID 没有对应的规范主题或重定向。", searchArchive: "搜索历史信息", loadFailed: "该部分加载失败。", marketPulse: "市场动态", subjectTypes: {event: "事件", company: "公司", stock: "股票", game: "游戏", repository: "代码仓库", paper: "论文", model: "模型", technology: "技术"} as Record<string, string>},
+  en: {eyebrow: "Topic", appearsIn: (count: number) => `Appears in ${count} source ${count === 1 ? "list" : "lists"}`, lastSeen: "Last seen", currentRank: "Current Rank", notRanked: "Not Currently Ranked", notRankedNote: "Not in the latest Trending list for its domain.", viewTrending: "View in Trending", calculated: "Updated", previousRank: "previously", rankHistory: "Rank History", noHistory: "No ranking history yet.", historyNote: (shown: number, total: number) => `Latest ${shown} of ${total} Trending updates that included this topic.`, chartLabel: (count: number, best: number, worst: number) => `Trending rank over the last ${count} updates, best #${best}, worst #${worst}. Higher on the chart is a better rank.`, best: "Best", worst: "Worst", date: "Updated", rank: "Rank", sources: "Sources", sourceAppearances: "Where It Appears", sourceNote: "Its latest position in each source's own list.", currentSnapshot: "In current list", lastSeenTag: "Last seen", firstSeen: "first seen", appearances: (count: number) => `seen ${count} ${count === 1 ? "time" : "times"}`, bestRank: "best", noAppearances: "No source appearances recorded.", moreAppearances: (shown: number, total: number) => `Showing ${shown} of ${total} lists.`, relatedNews: (count: number) => `Related news (${count})`, relatedNewsNote: "The same reports also appear, grouped into events, under Related Events.", aliases: "Also Known As", aliasGroups: {en: "English", "zh-CN": "Chinese", other: "Other"} as Record<string, string>, aliasTypes: {official_name: "Official", localized_name: "Localized", source_name: "Source name"} as Record<string, string>, notFound: "Topic not found", notFoundNote: "No topic exists at this address.", searchArchive: "Search the archive", loadFailed: "Could not load this section.", marketPulse: "Market Pulse", methodologyRank: "The Trending rank combines this topic's positions across the source lists of its domain, weighting fresher lists more (reciprocal rank fusion). It measures cross-platform attention, not quality, importance, or investment merit.", methodologyScore: (score: string) => `Current combined score: ${score}.`, methodologyObservations: (count: number, lists: number) => `${count} source observations recorded across ${lists} lists.`, methodologyLinks: "Related reports and events are linked only on exact evidence: the same article, a unique exact name or alias, an exchange code, or a cashtag."},
+  "zh-CN": {eyebrow: "主题", appearsIn: (count: number) => `出现在 ${count} 个来源榜单`, lastSeen: "最近出现", currentRank: "当前排名", notRanked: "当前未上榜", notRankedNote: "不在所属领域最新的综合趋势中。", viewTrending: "在综合趋势中查看", calculated: "更新于", previousRank: "上次", rankHistory: "排名历史", noHistory: "暂无排名历史。", historyNote: (shown: number, total: number) => `显示最近 ${shown} 次（共 ${total} 次）包含该主题的综合趋势更新。`, chartLabel: (count: number, best: number, worst: number) => `最近 ${count} 次综合趋势排名，最佳 #${best}，最差 #${worst}。图中越高代表排名越靠前。`, best: "最佳", worst: "最差", date: "更新时间", rank: "排名", sources: "来源数", sourceAppearances: "出现在哪些榜单", sourceNote: "在各来源自身榜单中的最新位置。", currentSnapshot: "在当前榜单", lastSeenTag: "最近出现", firstSeen: "首次出现", appearances: (count: number) => `出现 ${count} 次`, bestRank: "最佳", noAppearances: "暂无来源记录。", moreAppearances: (shown: number, total: number) => `显示 ${shown} / ${total} 个榜单。`, relatedNews: (count: number) => `相关新闻（${count}）`, relatedNewsNote: "这些报道也已按事件归组，显示在上方“相关事件”中。", aliases: "其他名称", aliasGroups: {en: "英文", "zh-CN": "中文", other: "其他"} as Record<string, string>, aliasTypes: {official_name: "官方名称", localized_name: "本地化名称", source_name: "来源名称"} as Record<string, string>, notFound: "未找到该主题", notFoundNote: "该地址没有对应的主题。", searchArchive: "搜索历史信息", loadFailed: "该部分加载失败。", marketPulse: "市场动态", methodologyRank: "综合趋势排名汇总该主题在所属领域各来源榜单中的位置，较新的榜单权重更高（倒数排名融合）。它衡量的是跨平台关注度，而非质量、重要性或投资价值。", methodologyScore: (score: string) => `当前综合分数：${score}。`, methodologyObservations: (count: number, lists: number) => `共记录 ${count} 次来源观测，涉及 ${lists} 个榜单。`, methodologyLinks: "相关报道与事件仅在有确切依据时关联：同一篇文章、唯一的精确名称或别名、交易所代码或 $代码。"},
 } as const;
 
 function formatMetric(appearance: SourceAppearance, locale: Locale) {
@@ -34,24 +34,10 @@ function CurrentRank({ detail, locale }: { detail: SubjectDetail; locale: Locale
     <header className="list-header"><h2 className="card-title">{t.currentRank}</h2><span className="tag">{trendingDomainLabel(detail.domain, locale)}</span></header>
     {current ? <>
       <p className="big-rank">#{current.rank} <TrendBadge trend={current.trend} change={current.rank_change} locale={locale}/></p>
-      <p className="meta">{common[locale].sources(current.source_count)}{current.previous_rank && ` · ${t.previousRank} #${current.previous_rank}`} · <span className="muted-score">{t.score} {current.final_score.toFixed(4)}</span></p>
+      <p className="meta">{common[locale].sources(current.source_count)}{current.previous_rank && ` · ${t.previousRank} #${current.previous_rank}`}</p>
       <p className="meta">{t.calculated} {formatDateTime(current.calculated_at, locale)}</p>
     </> : <><p className="big-rank muted">{t.notRanked}</p><p className="meta">{t.notRankedNote}</p></>}
     <p className="card-footer"><Link href={`/trending?domain=${detail.domain}`}>{t.viewTrending} →</Link></p>
-  </article>;
-}
-
-function Overview({ detail, locale }: { detail: SubjectDetail; locale: Locale }) {
-  const t = copy[locale];
-  return <article className="ranking-card compact">
-    <header className="list-header"><h2 className="card-title">{t.overview}</h2></header>
-    <dl className="facts">
-      <dt>{t.canonicalName}</dt><dd>{detail.canonical_name}</dd>
-      <dt>{t.subjectType}</dt><dd>{t.subjectTypes[detail.subject_type] ?? detail.subject_type}</dd>
-      <dt>{t.sourceLists}</dt><dd>{detail.source_appearance_count}</dd>
-      <dt>{t.observations}</dt><dd>{detail.observation_count}</dd>
-      <dt>{t.latestObserved}</dt><dd>{formatDateTime(detail.latest_observed_at, locale)}</dd>
-    </dl>
   </article>;
 }
 
@@ -109,7 +95,7 @@ function SourceAppearances({ detail, locale }: { detail: SubjectDetail; locale: 
         return <li key={`${item.source}-${item.rank_list}`}><span className="rank">#{item.latest_rank}</span><div>
           <div className="row-main"><strong>{item.source}</strong><span className="list-name">{item.rank_list}</span>
             {item.list_type === "market_pulse" && <span className="tag">{t.marketPulse}</span>}
-            <span className={item.in_current_snapshot ? "tag current" : "tag"}>{item.in_current_snapshot ? t.currentSnapshot : t.lastSeen}</span></div>
+            <span className={item.in_current_snapshot ? "tag current" : "tag"}>{item.in_current_snapshot ? t.currentSnapshot : t.lastSeenTag}</span></div>
           {item.title && <p className="appearance-title">{item.url ? <ExternalLink href={item.url} locale={locale}>{item.title}</ExternalLink> : item.title}</p>}
           <p><time dateTime={item.latest_observed_at}>{formatDateTime(item.latest_observed_at, locale)}</time>{metric && ` · ${metric}`} · {t.appearances(item.appearance_count)} · {t.bestRank} #{item.best_rank} · {t.firstSeen} {formatDateTime(item.first_seen_at, locale)}</p>
         </div></li>;
@@ -143,15 +129,15 @@ function RelatedNews({ subjectId, total, locale }: { subjectId: string; total: n
   }
   const t = copy[locale];
   const c = common[locale];
-  return <section className="detail-section" aria-labelledby="related-news"><h2 id="related-news" className="section-title">{t.relatedNews}{total > 0 && ` (${total})`}</h2>
-    <article className="ranking-card">
-      {failed && <p className="empty">{t.loadFailed}</p>}
-      {!items && !failed && <p className="empty">{c.loading}</p>}
-      {items?.length === 0 && <p className="empty">{t.noRelatedNews}</p>}
-      {items && items.length > 0 && <><p className="section-note">{t.relatedNote}</p><NewsList items={items} locale={locale} showLanguage/></>}
-      {items && items.length < total && lastPage === NEWS_PAGE && <button type="button" className="link-button" disabled={loading} onClick={more}>{loading ? c.loading : c.viewMore}</button>}
-    </article>
-  </section>;
+  // Every related report also belongs to an Event listed under Related Events, so this list is secondary.
+  return <details className="secondary related-news">
+    <summary>{t.relatedNews(total)}</summary>
+    <p className="section-note">{t.relatedNewsNote}</p>
+    {failed && <p className="empty">{t.loadFailed}</p>}
+    {!items && !failed && <p className="empty">{c.loading}</p>}
+    {items && items.length > 0 && <NewsList items={items} locale={locale} showLanguage/>}
+    {items && items.length < total && lastPage === NEWS_PAGE && <button type="button" className="link-button" disabled={loading} onClick={more}>{loading ? c.loading : c.viewMore}</button>}
+  </details>;
 }
 
 function Aliases({ detail, locale }: { detail: SubjectDetail; locale: Locale }) {
@@ -159,9 +145,10 @@ function Aliases({ detail, locale }: { detail: SubjectDetail; locale: Locale }) 
   const groups = ["en", "zh-CN", "other"].map(group => ({
     group, aliases: detail.aliases.filter(alias => group === "other" ? !["en", "zh-CN"].includes(alias.locale) : alias.locale === group),
   })).filter(item => item.aliases.length > 0);
+  if (groups.length === 0) return null;
   return <section className="detail-section" aria-labelledby="aliases"><h2 id="aliases" className="section-title">{t.aliases}</h2>
     <article className="ranking-card">
-      {groups.length === 0 ? <p className="empty">{t.noAliases}</p> : <dl className="alias-groups">{groups.map(({group, aliases}) => <div key={group}>
+      {<dl className="alias-groups">{groups.map(({group, aliases}) => <div key={group}>
         <dt>{t.aliasGroups[group]}</dt>
         <dd><ul className="chips">{aliases.map(alias => <li key={`${alias.locale}-${alias.alias}`} lang={alias.locale}>{alias.alias} <small>{t.aliasTypes[alias.alias_type] ?? alias.alias_type}</small></li>)}</ul></dd>
       </div>)}</dl>}
@@ -202,15 +189,28 @@ export default function SubjectPage() {
   return <main><div className="shell">
     <PageState loading={status === "loading"} error={status === "error" ? error : undefined} locale={locale}/>
     {detail && <>
-      <p className="eyebrow">{t.eyebrow} · {common[locale].shortDomains[detail.domain]} · {t.subjectTypes[detail.subject_type] ?? detail.subject_type}</p>
+      <p className="eyebrow detail-eyebrow">{t.eyebrow}</p>
       <h1 className="subject-title">{detail.display_names[locale]}</h1>
       {detail.display_names[locale] !== detail.canonical_name && <p className="intro">{detail.canonical_name}</p>}
-      <div className="detail-grid"><CurrentRank detail={detail} locale={locale}/><Overview detail={detail} locale={locale}/></div>
+      <p className="detail-meta">
+        <span>{common[locale].shortDomains[detail.domain]}</span>
+        <span>{common[locale].subjectTypes[detail.subject_type] ?? detail.subject_type}</span>
+        <span>{t.appearsIn(detail.source_appearance_count)}</span>
+        {detail.latest_observed_at && <span>{t.lastSeen} <time dateTime={detail.latest_observed_at}>{formatDateTime(detail.latest_observed_at, locale)}</time></span>}
+      </p>
+      <div className="rank-summary"><CurrentRank detail={detail} locale={locale}/></div>
+      <RelatedEvents filter={{subject_id: detail.subject_id}} locale={locale} hideWhenEmpty/>
       <RankHistorySection subjectId={detail.subject_id} locale={locale}/>
       <SourceAppearances detail={detail} locale={locale}/>
-      <RelatedNews subjectId={detail.subject_id} total={detail.related_news_count} locale={locale}/>
-      <RelatedEvents filter={{subject_id: detail.subject_id}} locale={locale}/>
+      {detail.related_news_count > 0 && <RelatedNews subjectId={detail.subject_id} total={detail.related_news_count} locale={locale}/>}
       <Aliases detail={detail} locale={locale}/>
+      <div className="detail-about">
+        <InfoNote title={common[locale].methodology}>
+          <p>{t.methodologyRank}{detail.current_ranking && `${locale === "zh-CN" ? "" : " "}${t.methodologyScore(detail.current_ranking.final_score.toFixed(4))}`}</p>
+          <p>{t.methodologyObservations(detail.observation_count, detail.source_appearance_count)}</p>
+          <p>{t.methodologyLinks}</p>
+        </InfoNote>
+      </div>
     </>}
   </div></main>;
 }

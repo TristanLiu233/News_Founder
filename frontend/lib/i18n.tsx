@@ -40,9 +40,8 @@ export const common = {
     lastReported: "Last reported",
     relatedEvents: "Related Events",
     noRelatedEvents: "No related events yet.",
-    relatedEventsNote: "Events are groups of existing news/feed items; an Event is related only through deterministic content links.",
     viewAllEvents: (count: number) => `View all ${count} events`,
-    subjectTag: "Subject",
+    subjectTag: "Topic",
     companyTag: "Company",
   },
   "zh-CN": {
@@ -75,7 +74,6 @@ export const common = {
     lastReported: "最近报道",
     relatedEvents: "相关事件",
     noRelatedEvents: "暂无相关事件。",
-    relatedEventsNote: "事件由已有新闻 / 快讯聚合而成；仅通过确定性的内容关联与该对象相关。",
     viewAllEvents: (count: number) => `查看全部 ${count} 个事件`,
     subjectTag: "主题",
     companyTag: "公司",
