@@ -12,8 +12,8 @@ from industry_intelligence.ai.prompts.event_candidates import (
     EVENT_PAIR_V1,
 )
 from industry_intelligence.ai.prompts.event_insights import (
-    EVENT_SUMMARY_V2,
-    EVENT_WHY_IT_MATTERS_V1,
+    EVENT_SUMMARY_V4,
+    EVENT_WHY_IT_MATTERS_V6,
     INSIGHT_PROMPTS,
 )
 from industry_intelligence.services.ai_enrichment import system_prompt
@@ -32,7 +32,7 @@ from industry_intelligence.services.ai_suggestions import (
 )
 
 T = datetime(2031, 3, 1, 9, 30, tzinfo=UTC)
-ALL_PROMPTS = (EVENT_SUMMARY_V2, EVENT_WHY_IT_MATTERS_V1, EVENT_ENTITY_CANDIDATES_V1, EVENT_PAIR_V1)
+ALL_PROMPTS = (EVENT_SUMMARY_V4, EVENT_WHY_IT_MATTERS_V6, EVENT_ENTITY_CANDIDATES_V1, EVENT_PAIR_V1)
 
 
 def item(title, excerpt=None, source="Source A", language="en", at=T):
@@ -63,25 +63,43 @@ def summary(text, refs=("C1",)):
 def test_prompt_versions_are_unique_and_explicit():
     versions = [spec.version for spec in ALL_PROMPTS]
     assert len(set(versions)) == len(versions)
-    assert all(version.endswith(("_v1", "_v2")) for version in versions)
+    assert all(version.endswith(("_v1", "_v2", "_v3", "_v4", "_v5", "_v6")) for version in versions)
     assert set(INSIGHT_PROMPTS) == {"event_summary", "event_why_it_matters"}
-    assert INSIGHT_PROMPTS["event_summary"].version == "event_summary_v2"
+    assert INSIGHT_PROMPTS["event_summary"].version == "event_summary_v4"
+    assert INSIGHT_PROMPTS["event_why_it_matters"].version == "event_why_it_matters_v6"
 
 
 def test_summary_prompt_keeps_plan_framing_and_adds_no_anchors():
     # Phase 7.1 live audit: v1 turned a planned share reduction "15个交易日后" into a certain
     # action counted from the announcement date, which no report stated.
-    system = system_prompt(EVENT_SUMMARY_V2, "zh-CN")
+    system = system_prompt(EVENT_SUMMARY_V4, "zh-CN")
     assert "never a certain or completed action" in system
     assert "Do not add reference points, time anchors" in system
+    assert "当日/on the day" in system
+    assert "Keep juxtaposed facts separate" in system
+    assert "消息传出后" in system
     assert GROUNDING_RULES in system
 
 
 def test_summary_prompt_version_change_changes_the_input_hash():
     ev = evidence(item("Studio A plans a sale."))
     assert input_hash("event_summary_v1", "zh-CN", ev) != input_hash(
-        EVENT_SUMMARY_V2.version, "zh-CN", ev
+        EVENT_SUMMARY_V4.version, "zh-CN", ev
     )
+
+
+def test_why_prompt_forbids_inferred_causation_and_preserves_reported_framing():
+    system = system_prompt(EVENT_WHY_IT_MATTERS_V6, "zh-CN")
+    assert "Do not infer causation, motivation, or a relationship" in system
+    assert "受此影响" in system
+    assert "Preserve reported, planned, expected, and alleged framing" in system
+    assert "Copy entity, person, company, organization, product, and title names exactly" in system
+    assert "Do not correct, normalize, expand, translate" in system
+    assert "Do not invent how information was communicated" in system
+    assert "采访" in system
+    assert "published_at field is when a report was published" in system
+    assert "not use it as an event date" in system
+    assert "Do not add sequence words" in system
 
 
 def test_every_prompt_carries_the_grounding_rules():
@@ -107,9 +125,9 @@ def test_schemas_are_closed_objects():
 
 
 def test_localized_prompts_name_the_output_language():
-    assert "Simplified Chinese" in system_prompt(EVENT_SUMMARY_V2, "zh-CN")
-    assert "in English" in system_prompt(EVENT_SUMMARY_V2, "en")
-    assert "{language}" not in system_prompt(EVENT_WHY_IT_MATTERS_V1, "zh-CN")
+    assert "Simplified Chinese" in system_prompt(EVENT_SUMMARY_V4, "zh-CN")
+    assert "in English" in system_prompt(EVENT_SUMMARY_V4, "en")
+    assert "{language}" not in system_prompt(EVENT_WHY_IT_MATTERS_V6, "zh-CN")
 
 
 # --- input hash ----------------------------------------------------------------------------
@@ -145,7 +163,7 @@ def test_rendered_event_marks_single_source_and_uses_refs():
 def test_valid_summary_maps_refs_to_event_content_ids():
     ev = evidence(item("Studio A raises $40 million", "Round led by Fund B on March 1"))
     outcome = validate(
-        EVENT_SUMMARY_V2, summary("According to Source A, Studio A raised $40 million."), ev
+        EVENT_SUMMARY_V4, summary("According to Source A, Studio A raised $40 million."), ev
     )
     assert outcome.valid, outcome.errors
     assert outcome.output["points"][0]["evidence"] == [ev.items[0].content_id]
@@ -157,7 +175,7 @@ def test_valid_summary_maps_refs_to_event_content_ids():
 )
 def test_unknown_evidence_refs_fail(refs):
     ev = evidence(item("Studio A announces game"))
-    outcome = validate(EVENT_SUMMARY_V2, summary("Source A reports the game.", refs), ev)
+    outcome = validate(EVENT_SUMMARY_V4, summary("Source A reports the game.", refs), ev)
     assert not outcome.valid
     assert any("unknown evidence ref" in error for error in outcome.errors)
 
@@ -165,16 +183,16 @@ def test_unknown_evidence_refs_fail(refs):
 def test_foreign_content_id_cannot_be_cited():
     ev = evidence(item("Studio A announces game"))
     foreign = str(uuid4())
-    outcome = validate(EVENT_SUMMARY_V2, summary("Source A reports the game.", (foreign,)), ev)
+    outcome = validate(EVENT_SUMMARY_V4, summary("Source A reports the game.", (foreign,)), ev)
     assert not outcome.valid
 
 
 def test_points_without_evidence_fail_schema_validation():
     ev = evidence(item("Studio A announces game"))
-    outcome = validate(EVENT_SUMMARY_V2, summary("Source A reports the game.", ()), ev)
+    outcome = validate(EVENT_SUMMARY_V4, summary("Source A reports the game.", ()), ev)
     assert not outcome.valid and outcome.errors[0].startswith("schema:")
-    assert not validate(EVENT_SUMMARY_V2, {"points": [], "insufficient_evidence": True}, ev).valid
-    assert not validate(EVENT_SUMMARY_V2, {"points": "x"}, ev).valid
+    assert not validate(EVENT_SUMMARY_V4, {"points": [], "insufficient_evidence": True}, ev).valid
+    assert not validate(EVENT_SUMMARY_V4, {"points": "x"}, ev).valid
 
 
 @pytest.mark.parametrize(
@@ -190,7 +208,7 @@ def test_points_without_evidence_fail_schema_validation():
 )
 def test_investment_advice_and_predictions_fail(text, locale):
     ev = evidence(item("Studio A announces game"))
-    outcome = validate(EVENT_SUMMARY_V2, summary(text), ev, locale)
+    outcome = validate(EVENT_SUMMARY_V4, summary(text), ev, locale)
     assert any("prohibited" in error for error in outcome.errors)
 
 
@@ -201,52 +219,52 @@ def test_investment_advice_and_predictions_fail(text, locale):
 def test_single_source_event_cannot_claim_multiple_reports(text):
     ev = evidence(item("Studio A announces game"))
     locale = "zh-CN" if "媒体" in text else "en"
-    outcome = validate(EVENT_SUMMARY_V2, summary(text), ev, locale)
+    outcome = validate(EVENT_SUMMARY_V4, summary(text), ev, locale)
     assert any("single-source" in error for error in outcome.errors)
     two = evidence(item("Studio A announces game"), item("Studio A game", source="Source B"))
-    assert validate(EVENT_SUMMARY_V2, summary(text), two, locale).valid
+    assert validate(EVENT_SUMMARY_V4, summary(text), two, locale).valid
 
 
 def test_figures_must_appear_in_the_evidence():
     ev = evidence(item("恩捷股份：拟11.5亿元收购湖北恩捷45%股权", language="zh-CN"))
     ok = validate(
-        EVENT_SUMMARY_V2, summary("恩捷股份拟以11.5亿元收购湖北恩捷45%股权。"), ev, "zh-CN"
+        EVENT_SUMMARY_V4, summary("恩捷股份拟以11.5亿元收购湖北恩捷45%股权。"), ev, "zh-CN"
     )
     assert ok.valid, ok.errors
     wrong = validate(
-        EVENT_SUMMARY_V2, summary("恩捷股份拟以12亿元收购湖北恩捷45%股权。"), ev, "zh-CN"
+        EVENT_SUMMARY_V4, summary("恩捷股份拟以12亿元收购湖北恩捷45%股权。"), ev, "zh-CN"
     )
     assert any("figures not in evidence ['12']" in error for error in wrong.errors)
-    converted = validate(EVENT_SUMMARY_V2, summary("Enjie plans a RMB 1.15 billion deal."), ev)
+    converted = validate(EVENT_SUMMARY_V4, summary("Enjie plans a RMB 1.15 billion deal."), ev)
     assert not converted.valid
 
 
 def test_publication_dates_and_small_counts_are_allowed_figures():
     ev = evidence(item("Studio A announces game"))
     text = "On March 1, 2031, Source A reported that Studio A announced 2 games."
-    assert validate(EVENT_SUMMARY_V2, summary(text), ev).valid
+    assert validate(EVENT_SUMMARY_V4, summary(text), ev).valid
 
 
 def test_output_must_be_in_the_requested_locale():
     ev = evidence(item("Studio A announces game"))
-    assert not validate(EVENT_SUMMARY_V2, summary("Source A reports the game."), ev, "zh-CN").valid
-    assert not validate(EVENT_SUMMARY_V2, summary("工作室A公布新作。"), ev, "en").valid
+    assert not validate(EVENT_SUMMARY_V4, summary("Source A reports the game."), ev, "zh-CN").valid
+    assert not validate(EVENT_SUMMARY_V4, summary("工作室A公布新作。"), ev, "en").valid
     mixed = summary("According to 游民星空, Studio A announced a game.")
-    assert validate(EVENT_SUMMARY_V2, mixed, ev, "en").valid
+    assert validate(EVENT_SUMMARY_V4, mixed, ev, "en").valid
 
 
 def test_why_it_matters_allows_an_explicit_insufficient_answer_only():
     ev = evidence(item("Studio A announces game"))
     empty = {"points": [], "insufficient_evidence": True}
-    assert validate(EVENT_WHY_IT_MATTERS_V1, empty, ev).valid
+    assert validate(EVENT_WHY_IT_MATTERS_V6, empty, ev).valid
     assert not validate(
-        EVENT_WHY_IT_MATTERS_V1, {**empty, "insufficient_evidence": False}, ev
+        EVENT_WHY_IT_MATTERS_V6, {**empty, "insufficient_evidence": False}, ev
     ).valid
     bad_context = {
         "points": [{"text": "Source A says it matters.", "context": "stock", "evidence": ["C1"]}],
         "insufficient_evidence": False,
     }
-    assert not validate(EVENT_WHY_IT_MATTERS_V1, bad_context, ev).valid
+    assert not validate(EVENT_WHY_IT_MATTERS_V6, bad_context, ev).valid
 
 
 def test_pair_judgement_maps_both_events_refs():

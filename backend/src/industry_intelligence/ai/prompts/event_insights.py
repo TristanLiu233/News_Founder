@@ -46,11 +46,13 @@ class WhyItMattersOutput(_Strict):
         return self
 
 
-# v2 (Phase 7.1 live audit): v1 rewrote "计划在15个交易日后的3个月内" as
+# v4 (Phase 7.1 live audit): v1 rewrote "计划在15个交易日后的3个月内" as
 # "将在公告披露15个交易日后的3个月内…实施", adding a time anchor and certainty that the report
-# did not state.
-EVENT_SUMMARY_V2 = PromptSpec(
-    version="event_summary_v2",
+# did not state. v2 later added "当日" to a reported share-price move whose evidence gave
+# no such time qualifier. v3 then connected juxtaposed facts with "消息传出后", another
+# sequence/causation not stated by the report.
+EVENT_SUMMARY_V4 = PromptSpec(
+    version="event_summary_v4",
     artifact_type="event_summary",
     system=f"""\
 You summarize one news Event for an industry intelligence product. An Event is a group of \
@@ -66,7 +68,11 @@ their titles, and still write the single point they support.
 Keep each report's own framing: a plan, proposal, intention, or expectation stays one (for \
 example 计划/拟/plans to), never a certain or completed action. Do not add reference points, \
 time anchors, conditions, or qualifiers that the reports do not state (for example what a \
-period is counted from), even when they are usual for this kind of news.
+period is counted from, or 当日/on the day), even when they are usual for this kind of news. \
+Do not infer a temporal or causal relationship merely because facts appear together in a \
+report. Keep juxtaposed facts separate. Never add connecting phrases such as after the news, \
+following the report, as a result, 消息传出后, 受此影响, or 因此 unless the report itself \
+explicitly states that connection.
 
 {GROUNDING_RULES}""",
     schema=object_schema(
@@ -81,8 +87,14 @@ period is counted from), even when they are usual for this kind of news.
     output_model=EventSummaryOutput,
 )
 
-EVENT_WHY_IT_MATTERS_V1 = PromptSpec(
-    version="event_why_it_matters_v1",
+# v6 (Phase 7.1 live audit): v1 turned juxtaposed facts into causal claims ("受此影响")
+# and linked a management change to an investigation without the report stating either link.
+# v2 silently changed the evidence's game name "Arc Raider" to "Arc Raiders". v3 added
+# "in an interview" when the evidence did not identify the communication format. v4 combined
+# a report's publication year with "September" in its excerpt as an unsupported event date. v5
+# added "following earlier cuts" where the report stated cuts but no such sequence.
+EVENT_WHY_IT_MATTERS_V6 = PromptSpec(
+    version="event_why_it_matters_v6",
     artifact_type="event_why_it_matters",
     system=f"""\
 You explain why one news Event matters, for an industry intelligence product. The input lists \
@@ -96,6 +108,26 @@ product enters a new market, a rule applies to an industry, or a deal changes ow
 must not predict outcomes, judge which company is better, or comment on share prices. If the \
 reports only state the bare fact without context, return no points and set \
 insufficient_evidence to true; that is the expected answer for most short news-flash reports.
+
+Do not infer causation, motivation, or a relationship between facts merely because they appear \
+in the same report. Use causal language such as because, led to, due to, as a result, 受此影响, \
+因此, or 与…有关 only when the report explicitly states that connection. Preserve reported, \
+planned, expected, and alleged framing exactly; never strengthen it into a confirmed fact.
+
+Copy entity, person, company, organization, product, and title names exactly as written in the \
+reports. Do not correct, normalize, expand, translate, or otherwise change a name based on \
+outside knowledge, even when another spelling may be more familiar.
+
+Do not invent how information was communicated. Never add interview, announcement, filing, \
+press release, conference, post, 采访, 公告, 发布会, or 帖子 unless that exact \
+communication format is stated in the reports.
+
+The published_at field is when a report was published, not when the occurrence happened. Do \
+not use it as an event date or combine it with a partial date in report text. Include a date, \
+time anchor, period, or sequence only when the title or excerpt explicitly states the complete \
+claim you write.
+Do not add sequence words such as earlier, later, before, after, following, subsequently, 此前, \
+随后, 之后, or 之前 unless that exact sequence is explicit in the title or excerpt.
 
 {GROUNDING_RULES}""",
     schema=object_schema(
@@ -119,4 +151,4 @@ insufficient_evidence to true; that is the expected answer for most short news-f
     output_model=WhyItMattersOutput,
 )
 
-INSIGHT_PROMPTS = {spec.artifact_type: spec for spec in (EVENT_SUMMARY_V2, EVENT_WHY_IT_MATTERS_V1)}
+INSIGHT_PROMPTS = {spec.artifact_type: spec for spec in (EVENT_SUMMARY_V4, EVENT_WHY_IT_MATTERS_V6)}
