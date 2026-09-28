@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 
-import { fetchEvents, type Domain, type EventSummary, type EventsPage, type NewsItem, type Trend } from "../lib/api";
+import { fetchEvents, type Domain, type EventSummary, type EventsPage, type NewsItem, type Trend, type TrendingItem } from "../lib/api";
 import { common, formatDateTime, type Locale } from "../lib/i18n";
 
 export const DOMAINS: Domain[] = ["computer", "finance", "gaming"];
@@ -23,6 +23,15 @@ export function TrendBadge({ trend, change, locale }: { trend: Trend | null; cha
   const amount = Math.abs(change ?? 0);
   const symbol = trend === "up" ? `↑${amount}` : trend === "down" ? `↓${amount}` : trend === "new" ? t.newLabel : "–";
   return <span className={`trend trend-${trend}`}><span aria-hidden="true">{symbol}</span><span className="visually-hidden">{t.trend[trend]}{amount ? ` ${amount}` : ""}</span></span>;
+}
+
+/** One Trending topic as shown on Trending and Home: name, trend cue, type, and source count (no score inputs). */
+export function TrendingTopicSummary({ item, locale }: { item: TrendingItem; locale: Locale }) {
+  const t = common[locale];
+  return <>
+    <div className="row-main"><Link href={`/subject/${item.subject_id}`} className="subject-link">{item.display_names[locale]}</Link><TrendBadge trend={item.trend} change={item.rank_change} locale={locale}/></div>
+    <p><span className="tag">{t.subjectTypes[item.subject_type] ?? item.subject_type}</span> {t.sources(item.source_count)}</p>
+  </>;
 }
 
 /** Composite attention domain label; Finance composite rankings are Market Pulse only. */
@@ -85,8 +94,11 @@ export function PageState({ loading, error, locale }: { loading: boolean; error?
   return null;
 }
 
-/** Canonical Events as compact rows: title, latest-report time (the list order), coverage, type, and a few entities. */
-export function EventList({ items, locale, showDomain = false }: { items: EventSummary[]; locale: Locale; showDomain?: boolean }) {
+/**
+ * Canonical Events as compact rows: title, latest-report time (the list order), coverage, type, and a few entities.
+ * `compact` (Home) keeps title, domain, type, time, and coverage only, with a plain "Multiple sources" cue.
+ */
+export function EventList({ items, locale, showDomain = false, compact = false }: { items: EventSummary[]; locale: Locale; showDomain?: boolean; compact?: boolean }) {
   const t = common[locale];
   return <ul className="event-list">{items.map(event => <li key={event.id}>
     <Link className="event-title" href={`/event/${event.id}`} lang={event.title_language}>{event.canonical_title}</Link>
@@ -95,13 +107,14 @@ export function EventList({ items, locale, showDomain = false }: { items: EventS
       {showDomain && <span>{t.shortDomains[event.domain]}</span>}
       <span>{t.reports(event.content_count)}</span>
       <span>{t.sources(event.source_count)}</span>
+      {compact && event.source_count > 1 && <span className="tag current">{t.multipleSources}</span>}
       {event.event_type !== "general" && <span className="tag">{t.eventTypes[event.event_type] ?? event.event_type}</span>}
     </p>
-    <p className="event-sources">{event.sources.map(source => source.name).join(" · ")}{event.source_count > event.sources.length && " …"}</p>
+    {!compact && <><p className="event-sources">{event.sources.map(source => source.name).join(" · ")}{event.source_count > event.sources.length && " …"}</p>
     {(event.subjects.length > 0 || event.companies.length > 0) && <ul className="chips event-entities">
       {event.subjects.map(subject => <li key={`s-${subject.id}`}><Link href={`/subject/${subject.id}`}>{subject.display_names[locale]}</Link> <small>{t.subjectTag}</small></li>)}
       {event.companies.map(company => <li key={`c-${company.id}`}><Link href={`/company/${company.id}`}>{company.display_names[locale]}</Link> <small>{t.companyTag}</small></li>)}
-    </ul>}
+    </ul>}</>}
   </li>)}</ul>;
 }
 

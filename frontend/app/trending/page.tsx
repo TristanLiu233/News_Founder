@@ -1,9 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { DiscoverTabs, DomainTabs, InfoNote, isDomain, NewsList, PageState, TrendBadge } from "../../components/shared";
+import { DiscoverTabs, DomainTabs, InfoNote, isDomain, NewsList, PageState, TrendingTopicSummary } from "../../components/shared";
 import { fetchTrending, type Domain, type TrendingDomain, type TrendingItem } from "../../lib/api";
 import { common, formatDateTime, useLocale, type Locale } from "../../lib/i18n";
 
@@ -17,12 +16,10 @@ const copy = {
 
 function TrendingCard({ item, locale }: { item: TrendingItem; locale: Locale }) {
   const t = copy[locale];
-  const c = common[locale];
   return <li className="trending-item">
     <span className="rank">#{item.rank}</span>
     <div>
-      <div className="row-main"><Link href={`/subject/${item.subject_id}`} className="subject-link">{item.display_names[locale]}</Link><TrendBadge trend={item.trend} change={item.rank_change} locale={locale}/></div>
-      <p><span className="tag">{c.subjectTypes[item.subject_type] ?? item.subject_type}</span> {c.sources(item.source_count)}</p>
+      <TrendingTopicSummary item={item} locale={locale}/>
       {/* Score inputs stay available, collapsed; the Methodology note explains them. */}
       <details><summary>{t.breakdown}</summary>
         <ul className="breakdown">{item.sources.map(source => <li key={source.source_key}>

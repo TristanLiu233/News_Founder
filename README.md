@@ -112,7 +112,7 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 
 | Route | Purpose | Default size |
 | --- | --- | --- |
-| `/` | Compact dashboard: Top 5 per domain (never a cross-domain ranking) and the latest finance news | 5 per domain, 5 news |
+| `/` | Dashboard composed from existing APIs: Today at a Glance (latest reports per domain), Latest Events (backend recency order), Trending Topics per domain (never a cross-domain ranking), and live External Company Rankings shown as published; no Home score or AI | 3 reports per domain, 5 Events, Top 5 per domain, Top 5 per ranking |
 | `/today` | Discover · Today: source-native content, one domain tab at a time. Every domain shows Latest News first (its `news`/`feed` sources from `/api/v1/sources`, read through `/api/v1/news`); Computer and Gaming then show their source rankings, Finance shows Market Pulse in a collapsed secondary section | 5 per source, View More |
 | `/trending` | Discover · Trending: cross-source composite attention per domain; rows show the topic, trend, type, and source count; score inputs are in a collapsed per-row Sources list and the RRF explanation in a collapsed Methodology note; Finance is labelled Market Pulse | Top 20, expandable to 50 |
 | `/search` | Discover · Search: multilingual topic (Subject) search with a query and domain tabs; type, source (`searchable` keys from `/api/v1/sources`), and language are under More filters; no search-mode control (the backend default is used) | 20 per page |
