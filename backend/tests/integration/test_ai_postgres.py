@@ -194,7 +194,7 @@ def test_enrichment_generates_validated_artifacts_per_type_and_locale(
     }
     summary = next(a for a in rows if a.artifact_type == "event_summary" and a.locale == "en")
     assert summary.provider == "fixture" and summary.model == "fixture-model"
-    assert summary.prompt_version == "event_summary_v1"
+    assert summary.prompt_version == "event_summary_v2"
     assert summary.source_content_ids == [str(item.id)]
     assert summary.output_json["points"][0]["evidence"] == [str(item.id)]
     # Locales and prompt versions hash separately.

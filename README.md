@@ -586,8 +586,9 @@ other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a ru
 - The provider sees only the Event's persisted reports under short refs (`C1`, `C2`, …): source,
   language, publication time, title, and an excerpt of at most 280 characters. No browsing, no
   outside knowledge, no other Events.
-- Prompts are versioned modules (`ai/prompts/`: `event_summary_v1`, `event_why_it_matters_v1`,
-  `event_entity_candidates_v1`, `event_pair_same_event_v1`); a prompt change is a new version.
+- Prompts are versioned modules (`ai/prompts/`: `event_summary_v2`, `event_why_it_matters_v1`,
+  `event_entity_candidates_v1`, `event_pair_same_event_v1`); a prompt change is a new version, and
+  artifacts of an older version are reported `stale` until regenerated.
 - Output must match a closed JSON schema, and deterministic guards must pass: every point cites
   refs of this Event only; no investment advice, price targets, ratings, or market predictions; a
   single-source Event is never described as multiple reports; every figure appears in the

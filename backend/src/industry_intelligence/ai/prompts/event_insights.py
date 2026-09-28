@@ -46,8 +46,11 @@ class WhyItMattersOutput(_Strict):
         return self
 
 
-EVENT_SUMMARY_V1 = PromptSpec(
-    version="event_summary_v1",
+# v2 (Phase 7.1 live audit): v1 rewrote "计划在15个交易日后的3个月内" as
+# "将在公告披露15个交易日后的3个月内…实施", adding a time anchor and certainty that the report
+# did not state.
+EVENT_SUMMARY_V2 = PromptSpec(
+    version="event_summary_v2",
     artifact_type="event_summary",
     system=f"""\
 You summarize one news Event for an industry intelligence product. An Event is a group of \
@@ -59,6 +62,11 @@ the core facts. Merge facts shared by several reports into one point instead of 
 Do not write a title or a headline and do not restate the whole headline as a point. Set \
 insufficient_evidence to true when the reports are too thin for more than a restatement of \
 their titles, and still write the single point they support.
+
+Keep each report's own framing: a plan, proposal, intention, or expectation stays one (for \
+example 计划/拟/plans to), never a certain or completed action. Do not add reference points, \
+time anchors, conditions, or qualifiers that the reports do not state (for example what a \
+period is counted from), even when they are usual for this kind of news.
 
 {GROUNDING_RULES}""",
     schema=object_schema(
@@ -111,4 +119,4 @@ insufficient_evidence to true; that is the expected answer for most short news-f
     output_model=WhyItMattersOutput,
 )
 
-INSIGHT_PROMPTS = {spec.artifact_type: spec for spec in (EVENT_SUMMARY_V1, EVENT_WHY_IT_MATTERS_V1)}
+INSIGHT_PROMPTS = {spec.artifact_type: spec for spec in (EVENT_SUMMARY_V2, EVENT_WHY_IT_MATTERS_V1)}
