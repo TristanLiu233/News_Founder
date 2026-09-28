@@ -21,10 +21,20 @@ from industry_intelligence.services.source_ingestion import ingest, ingest_all_e
 
 
 def _aware_datetime(value):
-    parsed = datetime.fromisoformat(value)
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not an ISO 8601 datetime: {value}") from exc
     if parsed.tzinfo is None:
-        raise argparse.ArgumentTypeError("--since needs a timezone offset, e.g. 2026-09-27T00:00Z")
+        raise argparse.ArgumentTypeError("needs a timezone offset, e.g. 2026-09-27T00:00Z")
     return parsed
+
+
+def _without_ids(result):
+    for item in result if isinstance(result, list) else [result]:
+        if isinstance(item, dict):
+            item.pop("content_ids", None)
+    return result
 
 
 def main():
@@ -37,7 +47,13 @@ def main():
     content = sub.add_parser("ingest-content")
     content.add_argument("source", choices=CONTENT_SOURCES)
     sub.add_parser("ingest-content-all")
-    sub.add_parser("content-relink")
+    relink = sub.add_parser("content-relink")
+    # Recompute deterministic content ↔ subject links; --dry-run lists them and writes nothing.
+    relink.add_argument("--dry-run", action="store_true")
+    update = sub.add_parser("content-update-all")
+    # ingest (per source) → link new items → event-build; repeat --source to narrow the run.
+    update.add_argument("--source", action="append", choices=CONTENT_SOURCES)
+    update.add_argument("--skip-events", action="store_true")
     rank = sub.add_parser("rank")
     rank.add_argument("domain", choices=list(Domain))
     sub.add_parser("rank-all")
@@ -65,6 +81,11 @@ def main():
     events.add_argument("--limit", type=int)
     events.add_argument("--dry-run", action="store_true")
     sub.add_parser("event-relink")
+    rebuild = sub.add_parser("event-rebuild")
+    # Bounded rebuild of derived Events for content published in [--from, --to).
+    rebuild.add_argument("--from", dest="start", type=_aware_datetime, required=True)
+    rebuild.add_argument("--to", dest="end", type=_aware_datetime, required=True)
+    rebuild.add_argument("--dry-run", action="store_true")
     event_merge = sub.add_parser("event-merge")
     # A reviewed, explicit merge of one duplicate Event into its canonical Event.
     event_merge.add_argument("canonical", type=UUID)
@@ -105,8 +126,32 @@ def main():
         elif args.command == "content-relink":
             from industry_intelligence.services.content_ingestion import relink_all_content
 
-            with factory.begin() as session:
-                result = relink_all_content(session)
+            session = factory()
+            try:
+                result = relink_all_content(session, dry_run=args.dry_run)
+                session.rollback() if args.dry_run else session.commit()
+            finally:
+                session.close()
+        elif args.command == "content-update-all":
+            from industry_intelligence.services.content_pipeline import update_all_content
+
+            result = asyncio.run(
+                update_all_content(settings, factory, args.source, events=not args.skip_events)
+            )
+            if result["totals"].get("failed_sources") or "error" in result.get("events", {}):
+                print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+                raise SystemExit(1)
+        elif args.command == "event-rebuild":
+            from industry_intelligence.services.event_rebuild import rebuild_events
+
+            session = factory()
+            try:
+                result = rebuild_events(session, args.start, args.end)
+                result.pop("partition", None)
+                result = {"dry_run": args.dry_run, **result}
+                session.rollback() if args.dry_run else session.commit()
+            finally:
+                session.close()
         elif args.command in {"company-ranking-ingest", "company-ranking-ingest-all"}:
             from industry_intelligence.services.company_ranking_ingestion import (
                 ingest_all_company_rankings,
@@ -168,10 +213,12 @@ def main():
                 ingest_content,
             )
 
-            result = asyncio.run(
-                ingest_content(args.source, settings, factory)
-                if args.command == "ingest-content"
-                else ingest_all_content(settings, factory)
+            result = _without_ids(
+                asyncio.run(
+                    ingest_content(args.source, settings, factory)
+                    if args.command == "ingest-content"
+                    else ingest_all_content(settings, factory)
+                )
             )
         else:
             result = asyncio.run(
@@ -179,7 +226,7 @@ def main():
                 if args.command == "ingest"
                 else ingest_all_enabled_sources(settings, factory)
             )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
         if isinstance(result, list) and any("error" in item for item in result):
             raise SystemExit(1)
     finally:

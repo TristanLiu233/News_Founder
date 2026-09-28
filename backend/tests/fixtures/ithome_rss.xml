@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>IT之家</title>
+    <language>zh-cn</language>
+    <link>https://www.ithome.com/</link>
+    <item>
+      <title>小米 18 Fold 中折叠首销情况曝光：9 月 7 日-13 日约 3.97 万台</title>
+      <description>&lt;p data-vmark="1a2b"&gt;IT之家 9 月 20 日消息，这是一段用于测试的正文段落，模拟 RSS 中包含完整 HTML 正文的情形。&lt;/p&gt;&lt;p&gt;&lt;img src="https://img.ithome.com/example.jpg"/&gt;&lt;/p&gt;&lt;p&gt;第二段正文：测试摘要会被截断到固定长度，完整正文不会被存储。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。这一段继续填充文字，用于确保描述长度超过摘要上限。&lt;/p&gt;</description>
+      <link>https://www.ithome.com/1/007/244.htm</link>
+      <guid>https://www.ithome.com/1/007/244.htm</guid>
+      <pubDate>Sun, 20 Sep 2026 02:15:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>缺少发布时间的条目</title>
+      <description>测试</description>
+      <link>https://www.ithome.com/1/007/245.htm</link>
+      <guid>https://www.ithome.com/1/007/245.htm</guid>
+    </item>
+    <item>
+      <title>非文章链接的条目</title>
+      <link>https://www.ithome.com/tag/example/</link>
+      <guid>https://www.ithome.com/tag/example/</guid>
+      <pubDate>Sun, 20 Sep 2026 03:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

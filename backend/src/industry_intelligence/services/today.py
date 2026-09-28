@@ -107,6 +107,9 @@ def today(session):
         domains.append(dict(domain=domain, lists=lists))
     finance_news = []
     for definition in CONTENT_SOURCES.values():
+        # Finance News Intelligence only; Computer/Gaming news reach the UI through Events.
+        if definition.domain != Domain.FINANCE:
+            continue
         finance_news.append(
             {
                 "source_key": definition.key,

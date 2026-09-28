@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	>
+<channel>
+	<title>Example Games News</title>
+	<link>https://news.example.com</link>
+	<item>
+		<title>Example Studio acquires Sample Games from Demo Interactive</title>
+		<link>https://news.example.com/2026/09/example-studio-acquires-sample-games/</link>
+		<dc:creator><![CDATA[Staff Writer]]></dc:creator>
+		<pubDate>Fri, 25 Sep 2026 13:56:43 +0000</pubDate>
+		<category><![CDATA[Acquisitions]]></category>
+		<category><![CDATA[Demo Interactive]]></category>
+		<category><![CDATA[Acquisitions]]></category>
+		<guid isPermaLink="false">https://news.example.com/?p=1001</guid>
+		<description><![CDATA[<img src="https://news.example.com/a.jpg"> Example Studio has acquired Sample Games &hellip;]]></description>
+		<content:encoded><![CDATA[<p>FULL ARTICLE BODY THAT MUST NEVER BE STORED</p>]]></content:encoded>
+	</item>
+	<item>
+		<title>《示例游戏》宣布延期至2027年发售</title>
+		<link>http://news.example.com/2026/09/1002/</link>
+		<dc:creator><![CDATA[编辑]]></dc:creator>
+		<pubDate>Thu, 24 Sep 2026 02:14:27 +0000</pubDate>
+		<category><![CDATA[资讯]]></category>
+		<guid isPermaLink="false">http://news.example.com/?p=1002</guid>
+		<description><![CDATA[9月24日，示例工作室宣布《示例游戏》延期。]]></description>
+	</item>
+	<item>
+		<link>https://news.example.com/2026/09/no-title/</link>
+		<pubDate>Thu, 24 Sep 2026 01:00:00 +0000</pubDate>
+	</item>
+	<item>
+		<title>Item without a link</title>
+		<pubDate>Thu, 24 Sep 2026 01:00:00 +0000</pubDate>
+	</item>
+</channel>
+</rss>

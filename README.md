@@ -1,6 +1,6 @@
 # Industry Intelligence & Ranking Platform
 
-The platform collects twelve public rankings plus four finance news/feed sources. It preserves source-native history, resolves ranked entries to auditable canonical subjects, and keeps chronological news separate from market rankings. Phase 4 adds an External Company Ranking Tracker that stores publisher company rankings as immutable snapshots with conservative company identity; Phase 5 adds sourced Company Profiles; Phase 6 groups existing news/feed items into canonical Events with deterministic, auditable rules. The UI supports English and 简体中文; the selected locale is stored in browser `localStorage`.
+The platform collects twelve public rankings plus ten chronological news/feed sources (four Finance, three Computer, three Gaming). It preserves source-native history, resolves ranked entries to auditable canonical subjects, and keeps chronological news separate from market rankings. Phase 4 adds an External Company Ranking Tracker that stores publisher company rankings as immutable snapshots with conservative company identity; Phase 5 adds sourced Company Profiles; Phase 6 groups existing news/feed items into canonical Events with deterministic, auditable rules; Phase 6.1 adds Computer and Gaming news, stricter deterministic content ↔ subject linking, a one-command content pipeline, and bounded Event rebuilds. The UI supports English and 简体中文; the selected locale is stored in browser `localStorage`.
 
 ## Sources
 
@@ -252,7 +252,7 @@ Finance
 
 Reuters was evaluated first, but its maintained newswire RSS delivery requires Reuters credentials; its public investor RSS is company-investor content rather than Markets/Business news. Yahoo Finance's US news RSS was not a stable public acquisition surface during verification. They were explicitly replaced with CNBC Markets and Nasdaq Markets RSS feeds. No login, WAF, CAPTCHA, or private API was bypassed.
 
-`rank_lists.list_type` now distinguishes `ranking` and `market_pulse`. General `ContentItem` records use `news` or `feed`, retain original article URLs and publication times, and deduplicate by `(source_id, external_id)` or normalized URL. `ContentSubjectLink` supports conservative many-to-many deterministic associations. Exact canonical names, unique exact aliases, and explicit uppercase ticker mentions are eligible; substring fuzzy matching is not. A live false-positive ticker association found during validation was rejected and removed. The final live corpus had no reliable links, while deterministic linking tests pass.
+`rank_lists.list_type` now distinguishes `ranking` and `market_pulse`. General `ContentItem` records use `news` or `feed`, retain original article URLs and publication times, and deduplicate by `(source_id, external_id)` or normalized URL. `ContentSubjectLink` supports conservative many-to-many deterministic associations. Exact canonical names, unique exact aliases, and explicit uppercase ticker mentions were eligible; substring fuzzy matching is not. (Phase 6.1 replaced these rules with the stricter `content-linker/2`; see below.) A live false-positive ticker association found during validation was rejected and removed. The final live corpus had no reliable links, while deterministic linking tests pass.
 
 Content ingestion refreshes linked subjects' SearchDocument projections so recent news titles contribute search context. Search still returns canonical subjects rather than articles. Finance Trending remains the existing Market Pulse composite ranking and now includes up to three related-news previews when reliable links exist; chronological feed positions never enter RRF.
 
@@ -468,10 +468,74 @@ Event ↔ Company links only through those subjects' company links.
 | GET | `/api/v1/events/{id}` | Event Detail with entities, coverage, time basis, and a 5-report preview (redirect-aware) |
 | GET | `/api/v1/events/{id}/content?limit=&offset=&order=` | The Event's reports with original URLs (10 default, 50 max) |
 
-Live coverage on 2026-09-28: the live content corpus is Finance-only (105 items from CNBC,
+Phase 6 live coverage on 2026-09-28 (historical; see Phase 6.1 for the current multi-domain state): the live content corpus was Finance-only (105 items from CNBC,
 Nasdaq, 东方财富, 新浪财经), so all 92 live Events are Finance; Computer and Gaming have no content
 and therefore no Events. 13 Events have two reports (all 东方财富 + 新浪财经), 79 have one. A
 manual audit of 35 Events found no wrong merge. Live content has no deterministic subject links,
 so live Events have no Subject or Company relation yet; those paths are covered by PostgreSQL tests
 and a disposable preview database, not by live data.
+
+## Phase 6.1 — Multi-domain Content & Event Coverage
+
+Phase 6 had Computer and Gaming Events = 0 because no Computer or Gaming news/feed source existed
+(`CONTENT_SOURCES` held only the four Finance sources); the Event resolver was not the cause.
+Phase 6.1 adds three Computer and three Gaming publisher RSS feeds, a stricter deterministic
+content ↔ subject linker, a one-command content pipeline, and a bounded Event rebuild. The Phase 6
+Event resolver and its thresholds are unchanged; nothing uses an LLM, embeddings, or fuzzy matching.
+
+| Domain | Source (key) | Language | Acquisition | Live verified |
+| --- | --- | --- | --- | --- |
+| Computer | IT之家 (`ithome_news`) | zh-CN | Official RSS | Yes |
+| Computer | TechCrunch (`techcrunch`) | en | Official RSS | Yes |
+| Computer | Ars Technica Biz & IT (`arstechnica_it`) | en | Official RSS | Yes |
+| Gaming | GamesIndustry.biz (`gamesindustry_biz`) | en | Official RSS | Yes |
+| Gaming | Gematsu (`gematsu`) | en | Official RSS | Yes |
+| Gaming | GameLook 游戏大观 (`gamelook`) | zh-CN | Official RSS (HTTP only) | Yes |
+
+Candidates were checked once each with the application's own HTTP client after reading
+robots.txt. Rejected: The Register (robots.txt disallows the feed), 虎嗅 RSS (timeout), 游民星空
+RSS (HTTP 403), 3DM and 游戏葡萄 (no public feed), 机核 and 触乐 (mostly podcasts and features), and
+Hacker News `newstories` (submissions; HN is already a ranking). Only the headline, original URL,
+publication time, source-native categories, and an excerpt of at most 280 characters are stored;
+feeds that embed full article bodies (IT之家, GameLook) never have them stored.
+
+Content ↔ Subject linking (`content-linker/2`) links a content item to a Subject of its own domain
+only on exact evidence, in this order: `same_article` (the publisher's native article ID equals a
+ranked story of the same source, or the article URL equals a Subject's canonical URL — e.g. a
+TechCrunch article that is a Hacker News top story), `exchange_code` (`寒武纪(688256)`,
+`688256.SH`), `cashtag` (`$TRUMP`), then `exact_name` / `exact_alias`. Names must be unique in the
+domain and are matched case-sensitively on word boundaries; single common words ("Stellar",
+"Jupiter", "Rust") never match alone; Chinese game titles must appear inside 《》, and any game
+title written inside 《》 matches with its exact extent; ranked-story Subjects never match by name;
+a name inside a longer matched name does not count. `content-relink` reconciles links (adds new,
+removes stale, reports both) and has `--dry-run`. Event ↔ Subject and Event ↔ Company links are
+still derived only from these links and existing Company ↔ Subject links.
+
+```bash
+# One bounded manual run: ingest every content source (failures isolated per source),
+# link the new items, then build Events for all unprocessed content
+python -m industry_intelligence.cli content-update-all
+python -m industry_intelligence.cli content-update-all --source gematsu --skip-events
+# Recompute content ↔ subject links (preview first), then refresh derived Event links
+python -m industry_intelligence.cli content-relink --dry-run
+python -m industry_intelligence.cli content-relink
+python -m industry_intelligence.cli event-relink
+# Rebuild the derived Event layer for content published in [from, to)
+python -m industry_intelligence.cli event-rebuild --from 2026-09-20T00:00Z --to 2026-09-29T00:00Z --dry-run
+```
+
+`event-rebuild` never touches content or content links. Every Event with a report in the window
+is rebuilt whole (the output reports the effective content range), other Events keep their IDs,
+and rebuilt Events get new IDs: Events are derived data, and cluster membership — not the ID — is
+the stable result. A window containing a reviewed merge (`EventRedirect`) is refused. Linking
+failures never roll back ingested content, and an Event-stage failure never deletes content.
+
+Live state on 2026-09-28: 356 content items (computer 70, finance 206, gaming 80); 335 Events
+(computer 70, finance 185 with 21 two-report Events, gaming 80); 6 content ↔ subject links on 5
+items and 5 Event ↔ Subject links across all three domains (澜起科技; the Hacker News story of a
+TechCrunch article; Warframe, WARDOGS, and 战狗 from GameLook), all manually reviewed with no false
+link; 0 Event ↔ Company links, because none of the linked Subjects has a Company link. Computer and
+Gaming Events are all single-report: the adopted sources report no common story in the same
+language, and cross-language stories are intentionally not merged. A live full-window
+`event-rebuild --dry-run` reproduced all 335 clusters.
 

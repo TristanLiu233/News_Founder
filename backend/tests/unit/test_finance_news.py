@@ -12,11 +12,6 @@ from industry_intelligence.adapters.source.finance_news import (
 )
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.domain.enums import ContentType
-from industry_intelligence.services.content_ingestion import (
-    _mentions,
-    _ticker_mentions,
-    deterministic_matches,
-)
 
 NOW = datetime(2026, 9, 27, tzinfo=UTC)
 
@@ -92,33 +87,8 @@ def test_finance_source_classification():
             "sina_turnover",
         )
     } == {ContentType.MARKET_PULSE}
+    # Content linking rules are tested in test_content_linking.py.
     assert {definition.content_type for definition in CONTENT_SOURCES.values()} == {
         ContentType.NEWS,
         ContentType.FEED,
     }
-
-
-def test_conservative_mentions_prevents_shared_substring_false_positive():
-    assert _mentions("Microsoft releases results", "Microsoft")
-    assert not _mentions("OpenAI Codex ships", "OpenAI API")
-    assert _mentions("OpenAI API ships", "OpenAI")
-    assert _ticker_mentions("NVDA rises and $MSFT follows", "NVDA")
-    assert not _ticker_mentions("Trump meets officials", "TRUMP")
-
-
-def test_deterministic_linking_exact_alias_ticker_ambiguous_and_multiple():
-    matches = deterministic_matches(
-        "Microsoft and 英伟达 discuss NVDA chips",
-        [(1, "Microsoft", "Microsoft"), (2, "NVIDIA", "NVIDIA"), (3, "OpenAI", "OpenAI")],
-        [(2, "英伟达"), (3, "AI"), (4, "AI")],
-        [(2, "stock:NVDA")],
-    )
-    assert matches[1][0] == "exact_canonical"
-    assert matches[2][0] == "exact_alias"
-    assert 3 not in matches and 4 not in matches
-
-
-def test_deterministic_linking_no_match_and_product_safety():
-    assert (
-        deterministic_matches("OpenAI Codex ships", [(1, "OpenAI API", "OpenAI API")], [], []) == {}
-    )
