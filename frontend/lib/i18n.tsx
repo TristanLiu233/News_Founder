@@ -12,7 +12,12 @@ export const common = {
   en: {
     brand: "Industry Intelligence",
     primaryNav: "Primary navigation",
-    nav: {home: "Home", today: "Today", trending: "Trending", search: "Search", rankings: "Rankings", companies: "Companies", events: "Events"},
+    nav: {discover: "Discover", today: "Today", trending: "Trending", search: "Search", rankings: "Rankings", companies: "Companies", events: "Events"},
+    discoverNav: "Discover sections",
+    all: "All",
+    methodology: "Methodology",
+    /** User-facing labels for `SubjectType` machine values (a Subject is shown as a "topic"). */
+    subjectTypes: {event: "Story", company: "Company", stock: "Asset", game: "Game", repository: "Repository", paper: "Paper", model: "Model", technology: "Technology"} as Record<string, string>,
     switchLanguage: "切换到中文",
     otherLocaleLabel: "中文",
     loading: "Loading…",
@@ -42,7 +47,11 @@ export const common = {
   "zh-CN": {
     brand: "行业情报",
     primaryNav: "主导航",
-    nav: {home: "首页", today: "今日", trending: "综合趋势", search: "搜索", rankings: "排行榜", companies: "公司", events: "事件"},
+    nav: {discover: "发现", today: "今日", trending: "综合趋势", search: "搜索", rankings: "排行榜", companies: "公司", events: "事件"},
+    discoverNav: "发现栏目",
+    all: "全部",
+    methodology: "计算方法",
+    subjectTypes: {event: "文章", company: "公司", stock: "资产", game: "游戏", repository: "代码仓库", paper: "论文", model: "模型", technology: "技术"} as Record<string, string>,
     switchLanguage: "Switch to English",
     otherLocaleLabel: "EN",
     loading: "加载中…",

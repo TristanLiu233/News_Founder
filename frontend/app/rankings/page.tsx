@@ -248,7 +248,7 @@ export default function RankingsPage() {
 
   return <main><div className="shell">
     <p className="eyebrow">{t.eyebrow}</p><h1>{t.title}</h1><p className="intro">{t.intro}</p>
-    {domain && <DomainTabs value={domain} onChange={value => navigate({domain: value})} locale={locale} label={(value, active) => common[active].domains[value]}/>}
+    {domain && <DomainTabs value={domain} onChange={value => navigate({domain: value})} locale={locale}/>}
     <PageState loading={!items && !listError} error={listError} locale={locale}/>
     {items && items.length === 0 && <p className="notice">{t.noRankings}</p>}
     {items && items.length > 0 && domain && <RankingSelector items={items} selected={selected} onSelect={key => navigate({domain, ranking: key})} locale={locale}/>}

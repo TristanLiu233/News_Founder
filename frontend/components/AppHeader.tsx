@@ -5,14 +5,12 @@ import { usePathname } from "next/navigation";
 
 import { common, useLocale } from "../lib/i18n";
 
+/** Discover groups the existing Today, Trending and Search routes; the brand links Home. */
 const links = [
-  {href: "/", key: "home"},
-  {href: "/today", key: "today"},
-  {href: "/trending", key: "trending"},
-  {href: "/search", key: "search"},
-  {href: "/rankings", key: "rankings"},
-  {href: "/companies", key: "companies"},
-  {href: "/events", key: "events"},
+  {href: "/today", key: "discover", match: ["/today", "/trending", "/search"]},
+  {href: "/events", key: "events", match: ["/events"]},
+  {href: "/rankings", key: "rankings", match: ["/rankings"]},
+  {href: "/companies", key: "companies", match: ["/companies"]},
 ] as const;
 
 export function AppHeader() {
@@ -21,10 +19,10 @@ export function AppHeader() {
   const t = common[locale];
   const other = locale === "en" ? "zh-CN" : "en";
   return <header className="app-header"><div className="shell header-inner">
-    <Link href="/" className="brand">{t.brand}</Link>
+    <Link href="/" className="brand" aria-current={pathname === "/" ? "page" : undefined}>{t.brand}</Link>
     <nav aria-label={t.primaryNav}><ul>
       {links.map(link => {
-        const active = link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
+        const active = link.match.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`));
         return <li key={link.href}><Link href={link.href} aria-current={active ? "page" : undefined}>{t.nav[link.key]}</Link></li>;
       })}
     </ul></nav>

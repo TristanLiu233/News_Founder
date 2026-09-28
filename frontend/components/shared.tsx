@@ -31,14 +31,44 @@ export function trendingDomainLabel(domain: Domain, locale: Locale) {
   return domain === "finance" ? `${t.domains.finance} · ${t.marketPulse}` : t.domains[domain];
 }
 
-export function DomainTabs({ value, onChange, locale, label = trendingDomainLabel }: {
+/** Short domain labels; the machine values stay `computer`, `finance`, `gaming`. */
+export function shortDomainLabel(domain: Domain, locale: Locale) {
+  return common[locale].shortDomains[domain];
+}
+
+export function DomainTabs({ value, onChange, locale, label = shortDomainLabel, onAll }: {
   /** Undefined when no domain is selected (an "All" control is pressed instead). */
   value?: Domain; onChange: (domain: Domain) => void; locale: Locale;
   label?: (domain: Domain, locale: Locale) => string;
+  /** When given, an "All" button comes first and is pressed while `value` is undefined. */
+  onAll?: () => void;
 }) {
   return <div className="domain-tabs" role="group" aria-label={common[locale].domainFilter}>
+    {onAll && <button type="button" aria-pressed={value === undefined} onClick={onAll}>{common[locale].all}</button>}
     {DOMAINS.map(domain => <button key={domain} type="button" aria-pressed={domain === value} onClick={() => onChange(domain)}>{label(domain, locale)}</button>)}
   </div>;
+}
+
+export type DiscoverSection = "today" | "trending" | "search";
+const DISCOVER_SECTIONS: DiscoverSection[] = ["today", "trending", "search"];
+
+/** Today | Trending | Search over the existing routes; switching keeps the selected domain. */
+export function DiscoverTabs({ current, domain, locale }: { current: DiscoverSection; domain?: Domain; locale: Locale }) {
+  const t = common[locale];
+  const query = domain ? `?domain=${domain}` : "";
+  return <nav className="discover-tabs" aria-label={t.discoverNav}><ul>
+    {DISCOVER_SECTIONS.map(section => <li key={section}>
+      <Link href={`/${section}${query}`} aria-current={section === current ? "page" : undefined}>{t.nav[section]}</Link>
+    </li>)}
+  </ul></nav>;
+}
+
+/** A collapsed explanation (methodology, data notes) kept out of the primary flow. */
+export function InfoNote({ title, children }: { title: string; children: ReactNode }) {
+  return <details className="info-note">
+    <summary><span aria-hidden="true" className="info-mark">ⓘ</span> {title}</summary>
+    <div className="info-body">{children}</div>
+  </details>;
 }
 
 export function NewsList({ items, locale, showLanguage = false }: { items: NewsItem[]; locale: Locale; showLanguage?: boolean }) {

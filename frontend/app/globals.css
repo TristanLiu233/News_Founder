@@ -18,7 +18,7 @@ a { color: #0b6e50; }
 .app-header ul { display: flex; flex-wrap: wrap; gap: .25rem; margin: 0; padding: 0; list-style: none; }
 .app-header nav a { display: block; padding: .4rem .7rem; border-radius: .4rem; color: #3c4540; font-weight: 650; text-decoration: none; }
 .app-header nav a:hover { background: #e8e5dc; }
-.app-header nav a[aria-current="page"] { background: #087f5b; color: #fff; }
+.app-header nav a[aria-current="page"] { background: #087f5b; color: #fff; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: .3em; }
 .locale-toggle { padding: .4rem .8rem; border: 1px solid #a6afa6; border-radius: .4rem; background: #fff; color: #17201c; font-weight: 700; }
 
 /* Sections, tabs and cards */
@@ -103,16 +103,32 @@ details.secondary > summary { margin: 0; font-size: 1rem; }
 .chips li { padding: .3rem .6rem; border: 1px solid #d4d1c7; border-radius: 999px; background: #f8f7f2; font-size: .88rem; overflow-wrap: anywhere; }
 .chips small { color: #87908a; font-size: .7rem; }
 
-/* Let the seven primary links wrap cleanly as the viewport narrows. */
-@media (max-width: 52rem) {
-  .header-inner { gap: 1rem; }
-  .app-header nav a { padding: .4rem .5rem; }
-}
+/* Narrow screens: brand + locale on the first row, the four primary links on one row below. */
 @media (max-width: 46rem) {
   .header-inner { flex-wrap: wrap; gap: .6rem 1rem; }
   .app-header nav { order: 3; flex-basis: 100%; }
+  .app-header ul { flex-wrap: nowrap; }
   .locale-toggle { margin-left: auto; }
 }
+
+/* Discover: Today | Trending | Search over the existing routes */
+.discover-tabs { margin: 1rem 0 0; border-bottom: 1px solid #d4d1c7; }
+.discover-tabs ul { display: flex; gap: .25rem; margin: 0; padding: 0; list-style: none; }
+.discover-tabs a { display: block; margin-bottom: -1px; padding: .55rem .9rem; border-bottom: 3px solid transparent; color: #3c4540; font-weight: 650; text-decoration: none; white-space: nowrap; }
+.discover-tabs a:hover { color: #087f5b; }
+.discover-tabs a[aria-current="page"] { border-bottom-color: #087f5b; color: #17201c; font-weight: 800; }
+.discover-tabs + .domain-tabs, .discover-tabs + .intro { margin-top: 1rem; }
+
+/* InfoNote: collapsed methodology and data notes */
+.info-note { max-width: 48rem; margin: .4rem 0 0; color: #626861; font-size: .85rem; }
+.info-note > summary { display: inline-block; margin: 0; color: #3c4540; }
+.info-mark { color: #087f5b; font-weight: 800; }
+.info-body { margin-top: .5rem; padding: .75rem 1rem; border-left: 3px solid #d4d1c7; background: #f8f7f2; }
+.info-body p { margin: 0 0 .5rem; }
+.info-body p:last-child { margin-bottom: 0; }
+.ranking-list .breakdown li { display: list-item; padding: .2rem 0; border: 0; }
+.breakdown .muted-score { display: block; }
+.breakdown-meta { margin: .35rem 0 0 1rem !important; }
 
 /* External company rankings */
 .ranking-selector { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); gap: .6rem; margin: 1rem 0; }
@@ -138,7 +154,11 @@ details.secondary > summary { margin: 0; font-size: 1rem; }
 
 @media (max-width: 42rem) {
   .app-header ul { gap: 0; }
-  .app-header nav a { padding: .4rem .4rem; font-size: .92rem; }
+  .app-header nav a { padding: .45rem .6rem; }
+  .discover-tabs a { padding-inline: .7rem; }
+  .domain-tabs { gap: .4rem; }
+  .domain-tabs button { padding: .45rem .75rem; font-size: .92rem; }
+  .subject-search { padding: .85rem; }
   .company-table { font-size: .84rem; }
   .company-table th, .company-table td { padding-left: .25rem; padding-right: .25rem; }
   .company-table td.rank { width: 2.4rem; }
@@ -159,7 +179,10 @@ button { cursor: pointer; }
 .query-row { display: flex; gap: .75rem; margin: .6rem 0 1.4rem; }
 .query-row input { flex: 1; min-width: 0; padding: .85rem; border: 1px solid #a6afa6; border-radius: .4rem; }
 .query-row button { background: #087f5b; color: white; border: 0; border-radius: .4rem; padding: .8rem 1.5rem; }
-.search-filters { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; }
+.more-filters { margin-top: 0; }
+.more-filters > summary { width: fit-content; margin: 0; }
+.more-filters .search-filters { margin-top: .8rem; }
+.search-filters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
 .search-filters select { display: block; width: 100%; margin-top: .4rem; padding: .6rem; border: 1px solid #b8bdb5; border-radius: .3rem; background: white; }
 .result-count { margin-top: 1.5rem; color: #626861; }
 .result-sources { font-size: .8rem; color: #626861; margin-bottom: 0; }
@@ -169,7 +192,7 @@ button { cursor: pointer; }
 .pagination button { padding: .6rem 1rem; border: 1px solid #b8bdb5; border-radius: .4rem; background: #fff; }
 button:disabled { cursor: default; opacity: .5; }
 input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid #69bb9e; outline-offset: 2px; }
-@media (max-width: 48rem) { .search-filters { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 48rem) { .search-filters { grid-template-columns: minmax(0, 1fr); } }
 
 /* Company discovery and detail */
 .company-search .query-row { margin-bottom: .75rem; }
