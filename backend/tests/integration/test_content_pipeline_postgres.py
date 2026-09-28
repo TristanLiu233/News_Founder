@@ -24,6 +24,7 @@ from industry_intelligence.db.models import (
     Event,
     EventCompanyLink,
     EventContentLink,
+    EventRetiredId,
     EventSubjectLink,
     Source,
     Subject,
@@ -32,6 +33,7 @@ from industry_intelligence.db.models.canonical import SubjectExternalIdentity
 from industry_intelligence.db.models.search import SubjectRedirect
 from industry_intelligence.domain.enums import ContentType, Domain, SubjectType
 from industry_intelligence.services import content_ingestion, content_pipeline
+from industry_intelligence.services.ai_insights import event_ai
 from industry_intelligence.services.company_resolution import resolve_company
 from industry_intelligence.services.content_ingestion import (
     link_content_items,
@@ -40,7 +42,13 @@ from industry_intelligence.services.content_ingestion import (
 )
 from industry_intelligence.services.event_ingestion import build_events
 from industry_intelligence.services.event_merge import merge_events
-from industry_intelligence.services.event_rebuild import EventRebuildRefused, rebuild_events
+from industry_intelligence.services.event_rebuild import (
+    EventRebuildRefused,
+    EventRetirementInvariantError,
+    rebuild_events,
+    retire_event,
+)
+from industry_intelligence.services.events import event_content, event_detail
 
 pytestmark = pytest.mark.integration
 
@@ -401,9 +409,19 @@ def test_rebuild_window_membership_new_ids_and_outside_untouched(db, tag):
     assert after["edge_a"] == after["edge_b"] != before["edge_a"]
     assert after["far"] == before["far"]
     assert db.get(Event, before["deal_a"]) is None
+    retired = db.get(EventRetiredId, before["deal_a"])
+    assert str(retired.representative_content_id) == ids["deal_a"]
+    assert retired.content_item_ids[0] == str(ids["deal_a"])
+    assert event_detail(db, before["deal_a"])["id"] == str(after["deal_a"])
+    assert event_detail(db, before["deal_a"])["redirected"] is True
+    assert event_content(db, before["deal_a"])["event_id"] == str(after["deal_a"])
+    assert event_ai(db, before["deal_a"], "en")["event_id"] == str(after["deal_a"])
     assert result["content_range"]["last"] == (T0 + timedelta(hours=20)).isoformat()
     again = rebuild_events(db, T0 - timedelta(hours=1), T0 + timedelta(hours=4))
     assert again["partition"] == result["partition"]
+    latest = _event_of(db, ids["deal_a"])
+    assert event_detail(db, before["deal_a"])["id"] == str(latest)
+    assert event_detail(db, after["deal_a"])["id"] == str(latest)
 
 
 def test_rebuild_dry_run_writes_nothing_and_processes_unbuilt_content(db, tag):
@@ -415,6 +433,36 @@ def test_rebuild_dry_run_writes_nothing_and_processes_unbuilt_content(db, tag):
     assert preview["previously_unprocessed"] == 1 and preview["new_multi_content_events"] == 1
     nested.rollback()
     assert _event_of(db, ids["deal_a"]) == event_before and _event_of(db, ids["deal_b"]) is None
+    assert db.get(EventRetiredId, event_before) is None
+
+
+def test_retirement_is_idempotent_and_refuses_anchor_overwrite(db, tag):
+    ids = _corpus(db, tag)
+    build_events(db, content_ids=[ids["deal_a"]])
+    event = db.get(Event, _event_of(db, ids["deal_a"]))
+    assert retire_event(db, event) is retire_event(db, event)
+    db.flush()
+    assert db.scalar(select(func.count()).select_from(EventRetiredId)) >= 1
+    db.get(EventRetiredId, event.id).representative_content_id = ids["deal_b"]
+    with pytest.raises(EventRetirementInvariantError, match="conflicting content anchors"):
+        retire_event(db, event)
+
+
+def test_rebuild_failure_rolls_back_retirement_with_transaction(db, tag, monkeypatch):
+    ids = _corpus(db, tag)
+    build_events(db, content_ids=[ids["deal_a"]])
+    old_id = _event_of(db, ids["deal_a"])
+
+    def fail_build(*_args, **_kwargs):
+        raise RuntimeError("synthetic rebuild failure")
+
+    nested = db.begin_nested()
+    monkeypatch.setattr("industry_intelligence.services.event_rebuild.build_events", fail_build)
+    with pytest.raises(RuntimeError, match="synthetic rebuild failure"):
+        rebuild_events(db, T0 - timedelta(hours=1), T0 + timedelta(hours=1))
+    nested.rollback()
+    assert db.get(EventRetiredId, old_id) is None
+    assert db.get(Event, old_id) is not None
 
 
 def test_rebuild_refuses_reviewed_merges_and_invalid_ranges(db, tag):

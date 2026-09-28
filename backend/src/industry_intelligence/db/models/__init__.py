@@ -14,6 +14,7 @@ from industry_intelligence.db.models.event import (
     EventCompanyLink,
     EventContentLink,
     EventRedirect,
+    EventRetiredId,
     EventSubjectLink,
 )
 from industry_intelligence.db.models.rank_list import RankList
@@ -39,6 +40,7 @@ __all__ = [
     "EventCompanyLink",
     "EventContentLink",
     "EventRedirect",
+    "EventRetiredId",
     "EventSubjectLink",
     "RankList",
     "RankObservation",

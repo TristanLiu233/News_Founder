@@ -8,6 +8,7 @@ content publication times (``time_basis: content_publication``), not verified oc
 from __future__ import annotations
 
 from collections import defaultdict
+from uuid import UUID
 
 from sqlalchemy import func, select
 
@@ -18,6 +19,7 @@ from industry_intelligence.db.models import (
     EventCompanyLink,
     EventContentLink,
     EventRedirect,
+    EventRetiredId,
     EventSubjectLink,
     Source,
     Subject,
@@ -49,7 +51,7 @@ def _iso(value):
 
 
 def resolve_event_redirect(session, event_id):
-    """Follow reviewed-merge redirects to the canonical Event ID."""
+    """Resolve reviewed merges, then rebuild-retired IDs through current content ownership."""
 
     seen = set()
     while event_id not in seen:
@@ -60,6 +62,28 @@ def resolve_event_redirect(session, event_id):
         if target is None:
             break
         event_id = target
+    if session.get(Event, event_id) is not None:
+        return event_id
+    retired = session.get(EventRetiredId, event_id)
+    if retired is None:
+        return event_id
+    candidates = []
+    if retired.representative_content_id is not None:
+        candidates.append(retired.representative_content_id)
+    for raw_id in retired.content_item_ids:
+        try:
+            content_id = UUID(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if content_id not in candidates:
+            candidates.append(content_id)
+    for content_id in candidates:
+        current = session.scalar(
+            select(EventContentLink.event_id).where(EventContentLink.content_item_id == content_id)
+        )
+        if current is not None:
+            # A reviewed merge can subsequently retire the current content owner.
+            return resolve_event_redirect(session, current)
     return event_id
 
 

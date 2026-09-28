@@ -8,9 +8,8 @@ content published in ``[start, end)`` (``coalesce(published_at, observed_at)``, 
 * the *affected* Events are those with at least one member in the window; all of their members
   are reprocessed (so an Event that straddles a window edge is rebuilt whole, and the reported
   ``content_range`` shows the effective extent); every other Event is untouched;
-* rebuilt Events get new IDs — old ``/event/{id}`` URLs of affected Events stop resolving.
-  Cluster membership, not the ID, is the stable result: the same content, rules, and window
-  produce the same partition;
+* before deletion, each affected ID is retired against its stable representative ContentItem
+  and ordered member IDs, so old ``/event/{id}`` URLs resolve directly to current ownership;
 * a window touching a reviewed merge (an ``EventRedirect`` on either side, or a content link
   carrying ``reviewed_merge`` evidence) or an Event with a reviewed Company link (Phase 7) is
   refused, because a rebuild would discard a human decision (reviewed content ↔ subject links
@@ -30,6 +29,7 @@ from industry_intelligence.db.models import (
     EventCompanyLink,
     EventContentLink,
     EventRedirect,
+    EventRetiredId,
     EventSubjectLink,
     Source,
 )
@@ -44,6 +44,10 @@ from industry_intelligence.services.event_resolution import extract_headline
 
 class EventRebuildRefused(ValueError):
     """The rebuild is invalid or would discard reviewed decisions; nothing was changed."""
+
+
+class EventRetirementInvariantError(RuntimeError):
+    """An existing retired ID disagrees with the Event currently being retired."""
 
 
 def _partition(session, event_ids):
@@ -85,6 +89,48 @@ def _clusters(session, partition):
             }
         )
     return sorted(output, key=lambda cluster: cluster["canonical_title"])
+
+
+def _ordered_content_ids(session, event):
+    """Representative first, then the repository's stable publication ordering."""
+
+    ordered = list(
+        session.scalars(
+            select(ContentItem.id)
+            .join(EventContentLink, EventContentLink.content_item_id == ContentItem.id)
+            .where(EventContentLink.event_id == event.id)
+            .order_by(EFFECTIVE_AT, ContentItem.id)
+        )
+    )
+    representative = event.representative_content_id
+    if representative in ordered:
+        ordered.remove(representative)
+        ordered.insert(0, representative)
+    return ordered
+
+
+def retire_event(session, event):
+    """Insert one rebuild retirement record, or verify an identical prior record."""
+
+    content_ids = _ordered_content_ids(session, event)
+    anchor = event.representative_content_id or (content_ids[0] if content_ids else None)
+    existing = session.get(EventRetiredId, event.id)
+    if existing is not None:
+        if existing.representative_content_id != anchor or existing.content_item_ids != [
+            str(content_id) for content_id in content_ids
+        ]:
+            raise EventRetirementInvariantError(
+                f"retired Event {event.id} has conflicting content anchors"
+            )
+        return existing
+    retired = EventRetiredId(
+        retired_id=event.id,
+        representative_content_id=anchor,
+        content_item_ids=[str(content_id) for content_id in content_ids],
+        reason="rebuild",
+    )
+    session.add(retired)
+    return retired
 
 
 def rebuild_events(session, start, end):
@@ -163,6 +209,11 @@ def rebuild_events(session, start, end):
     ).scalars()
     times = sorted(effective)
     if affected:
+        for event in session.scalars(
+            select(Event).where(Event.id.in_(list(affected))).order_by(Event.id)
+        ):
+            retire_event(session, event)
+        session.flush()
         session.execute(
             delete(EventSubjectLink).where(EventSubjectLink.event_id.in_(list(affected)))
         )

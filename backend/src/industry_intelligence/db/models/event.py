@@ -10,6 +10,7 @@ report. It is derived only from persisted ``ContentItem`` rows by the determinis
   ``ContentSubjectLink`` and ``CompanySubjectLink`` rows of the Event's content; never matched
   independently.
 * ``EventRedirect``: a reviewed merge; the duplicate Event row is kept so old IDs resolve.
+* ``EventRetiredId``: a derived Event ID retired by rebuild, resolved through stable content.
 
 Event time fields are content publication times (``published_at``, falling back to
 ``observed_at``), not verified occurrence times.
@@ -143,5 +144,22 @@ class EventRedirect(Base):
     canonical_id: Mapped[UUID] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     merged_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now()
+    )
+
+
+class EventRetiredId(Base):
+    """A rebuild-retired Event permalink anchored to its persisted content reports."""
+
+    __tablename__ = "event_retired_ids"
+
+    # Deliberately no FK to events: the referenced derived Event row is deleted by rebuild.
+    retired_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    representative_content_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("content_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    content_item_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    retired_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now()
     )

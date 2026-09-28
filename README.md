@@ -526,8 +526,12 @@ python -m industry_intelligence.cli event-rebuild --from 2026-09-20T00:00Z --to 
 
 `event-rebuild` never touches content or content links. Every Event with a report in the window
 is rebuilt whole (the output reports the effective content range), other Events keep their IDs,
-and rebuilt Events get new IDs: Events are derived data, and cluster membership — not the ID — is
-the stable result. A window containing a reviewed merge (`EventRedirect`) is refused. Linking
+and rebuilt Events get new IDs. Before deletion, `event_retired_ids` records each old UUID against
+its stable representative report plus an ordered report fallback list. Event reads resolve an old
+UUID directly through the report's current `EventContentLink` owner, so repeated rebuilds do not
+form redirect chains and a split follows the old representative report. Reviewed merge redirects
+remain separate. IDs retired before this registry existed cannot be reconstructed reliably. A
+window containing a reviewed merge (`EventRedirect`) is refused. Linking
 failures never roll back ingested content, and an Event-stage failure never deletes content.
 
 Live state on 2026-09-28: 356 content items (computer 70, finance 206, gaming 80); 335 Events
@@ -660,4 +664,3 @@ Status on 2026-09-28 (Phase 7 closure): implemented and tested with a fixture pr
 automated test calls a paid API). Phase 7.1 then configured Anthropic locally and live-verified
 and manually audited primary-locale output for 17 Events and a 6-Event bilingual subset; see
 `AGENTS.md` (Phase 7.1 checkpoints) for the current state.
-
