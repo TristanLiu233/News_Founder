@@ -586,14 +586,28 @@ other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a ru
 - The provider sees only the Event's persisted reports under short refs (`C1`, `C2`, …): source,
   language, publication time, title, and an excerpt of at most 280 characters. No browsing, no
   outside knowledge, no other Events.
-- Prompts are versioned modules (`ai/prompts/`: `event_summary_v2`, `event_why_it_matters_v1`,
-  `event_entity_candidates_v1`, `event_pair_same_event_v1`); a prompt change is a new version, and
-  artifacts of an older version are reported `stale` until regenerated.
+- Prompts are versioned modules (`ai/prompts/`); a prompt change is a new version, and artifacts
+  of an older version are reported `stale` until regenerated. Summary and Why It Matters have two
+  lineages chosen deterministically from the report languages: primary-locale output (every report
+  in the output language: `event_summary_v4`, `event_why_it_matters_v6`) and cross-language output
+  (`event_summary_xlang_v1`, `event_why_it_matters_xlang_v1`, which add translation rules and
+  repeat the output language in the request). A change in one lineage never makes the other stale.
 - Output must match a closed JSON schema, and deterministic guards must pass: every point cites
   refs of this Event only; no investment advice, price targets, ratings, or market predictions; a
   single-source Event is never described as multiple reports; every figure appears in the
-  evidence; the text is in the requested locale. Any failure stores a `failed` artifact (error
-  code only) and nothing is displayed.
+  evidence, except a scaled figure exactly equal to an evidence figure in the other notation
+  (4.2亿元 ↔ 420 million, $11.6 billion ↔ 116亿); the text is in the requested locale.
+  Cross-language output is also rejected for a sequence/causal connector ("after which", "as a
+  result", 随后, 因此, …) without a signal of the same kind in the reports, and for a Latin ↔
+  Chinese name gloss in parentheses unless the reports give both forms. Any failure stores a
+  `failed` artifact (error code only) and nothing is displayed.
+- A reviewer hides an artifact that fails the manual audit with `ai-artifact-reject` (the API
+  never serves a rejected artifact). `GET /api/v1/events/{id}/ai` reports each insight as
+  `available`, `not_generated`, `failed`, `rejected` (withdrawn after review), or `stale` (older
+  reports or an older prompt version); only `available` carries text. Page requests never call a
+  provider. An isolated wording defect may be regenerated once; a
+  defect that recurs across Events or prompt versions needs a deterministic guard or stays
+  rejected.
 - Each artifact records provider, served model, prompt version, locale, the evidence content IDs,
   and an `input_hash` over prompt version, locale, and the exact evidence. A matching valid
   artifact is a replay (no request, no cost). When an Event's reports change, the API reports the
@@ -613,7 +627,10 @@ python -m industry_intelligence.cli ai-event-enrich --event-id <uuid> --locale z
 python -m industry_intelligence.cli ai-artifact-reject <artifact-uuid> --reason "evidence says otherwise"
 ```
 
-### Suggestions and review
+### Suggestions and review (Experimental / Future)
+
+Entity suggestions and cross-language Event judgements are implemented and fixture-tested but have
+never been run live; they are Experimental / Future and not part of the Phase 7.1 release gate.
 
 - `ai-entity-suggest` asks which entities the reports name. Each name must literally appear in
   the cited reports and is then resolved by deterministic exact lookup (Subject title/alias in the
@@ -639,7 +656,8 @@ wrong even after validation — the UI labels it "AI-generated", says it may con
 links every point to its reports, and the full timeline stays on the page. AI output never feeds
 Trending, Search, Rankings, company profiles, or scores.
 
-Status on 2026-09-28: implemented and tested with a fixture provider (no automated test calls a
-paid API); no AI provider is configured in this environment, so live AI output has not been
-generated or audited (live `ai_artifacts` = 0, `ai_suggestions` = 0).
+Status on 2026-09-28 (Phase 7 closure): implemented and tested with a fixture provider (no
+automated test calls a paid API). Phase 7.1 then configured Anthropic locally and live-verified
+and manually audited primary-locale output for 17 Events and a 6-Event bilingual subset; see
+`AGENTS.md` (Phase 7.1 checkpoints) for the current state.
 

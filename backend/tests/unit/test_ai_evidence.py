@@ -1,5 +1,6 @@
 """Prompts, input hashes, evidence validation guards, and suggestion rules (pure, no I/O)."""
 
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -12,14 +13,23 @@ from industry_intelligence.ai.prompts.event_candidates import (
     EVENT_PAIR_V1,
 )
 from industry_intelligence.ai.prompts.event_insights import (
+    CROSS_LANGUAGE,
+    CROSS_LANGUAGE_PROMPTS,
     EVENT_SUMMARY_V4,
+    EVENT_SUMMARY_XLANG_V1,
     EVENT_WHY_IT_MATTERS_V6,
+    EVENT_WHY_IT_MATTERS_XLANG_V1,
+    FINAL_LANGUAGE_CHECK,
     INSIGHT_PROMPTS,
+    OUTPUT_LANGUAGE_RULES,
+    PRIMARY,
+    insight_spec,
 )
-from industry_intelligence.services.ai_enrichment import system_prompt
+from industry_intelligence.services.ai_enrichment import insight_payload, system_prompt
 from industry_intelligence.services.ai_evidence import (
     EventEvidence,
     EvidenceItem,
+    generation_mode,
     input_hash,
     ref_map,
     render_event,
@@ -32,7 +42,14 @@ from industry_intelligence.services.ai_suggestions import (
 )
 
 T = datetime(2031, 3, 1, 9, 30, tzinfo=UTC)
-ALL_PROMPTS = (EVENT_SUMMARY_V4, EVENT_WHY_IT_MATTERS_V6, EVENT_ENTITY_CANDIDATES_V1, EVENT_PAIR_V1)
+ALL_PROMPTS = (
+    EVENT_SUMMARY_V4,
+    EVENT_WHY_IT_MATTERS_V6,
+    EVENT_SUMMARY_XLANG_V1,
+    EVENT_WHY_IT_MATTERS_XLANG_V1,
+    EVENT_ENTITY_CANDIDATES_V1,
+    EVENT_PAIR_V1,
+)
 
 
 def item(title, excerpt=None, source="Source A", language="en", at=T):
@@ -63,10 +80,27 @@ def summary(text, refs=("C1",)):
 def test_prompt_versions_are_unique_and_explicit():
     versions = [spec.version for spec in ALL_PROMPTS]
     assert len(set(versions)) == len(versions)
-    assert all(version.endswith(("_v1", "_v2", "_v3", "_v4", "_v5", "_v6")) for version in versions)
-    assert set(INSIGHT_PROMPTS) == {"event_summary", "event_why_it_matters"}
+    assert all(re.fullmatch(r"[a-z_]+_v[1-9][0-9]*", version) for version in versions)
+    assert (
+        set(INSIGHT_PROMPTS)
+        == set(CROSS_LANGUAGE_PROMPTS)
+        == {
+            "event_summary",
+            "event_why_it_matters",
+        }
+    )
+    # Primary-locale prompts stay the Checkpoint D audited versions.
     assert INSIGHT_PROMPTS["event_summary"].version == "event_summary_v4"
     assert INSIGHT_PROMPTS["event_why_it_matters"].version == "event_why_it_matters_v6"
+    assert CROSS_LANGUAGE_PROMPTS["event_summary"].version == "event_summary_xlang_v1"
+    assert CROSS_LANGUAGE_PROMPTS["event_why_it_matters"].version == (
+        "event_why_it_matters_xlang_v1"
+    )
+    for artifact_type in INSIGHT_PROMPTS:
+        assert insight_spec(artifact_type, PRIMARY) is INSIGHT_PROMPTS[artifact_type]
+        assert insight_spec(artifact_type, CROSS_LANGUAGE) is CROSS_LANGUAGE_PROMPTS[artifact_type]
+        assert not INSIGHT_PROMPTS[artifact_type].cross_language
+        assert CROSS_LANGUAGE_PROMPTS[artifact_type].cross_language
 
 
 def test_summary_prompt_keeps_plan_framing_and_adds_no_anchors():
@@ -100,6 +134,83 @@ def test_why_prompt_forbids_inferred_causation_and_preserves_reported_framing():
     assert "published_at field is when a report was published" in system
     assert "not use it as an event date" in system
     assert "Do not add sequence words" in system
+
+
+def test_primary_prompts_carry_no_cross_language_rules():
+    # Phase 7.1 Checkpoint E: translation rules must not change the audited primary prompts.
+    for spec in INSIGHT_PROMPTS.values():
+        assert OUTPUT_LANGUAGE_RULES not in spec.system
+        assert FINAL_LANGUAGE_CHECK not in spec.system
+        assert spec.system.rstrip().endswith(GROUNDING_RULES)
+
+
+def test_cross_language_prompts_are_the_primary_text_plus_language_rules():
+    for artifact_type, spec in CROSS_LANGUAGE_PROMPTS.items():
+        primary = INSIGHT_PROMPTS[artifact_type]
+        assert spec.schema == primary.schema and spec.output_model is primary.output_model
+        assert spec.system == primary.system.replace(
+            GROUNDING_RULES,
+            f"{OUTPUT_LANGUAGE_RULES}\n\n{GROUNDING_RULES}\n\n{FINAL_LANGUAGE_CHECK}",
+        )
+
+
+def test_cross_language_prompts_keep_names_hedges_and_output_language():
+    # Phase 7.1 Checkpoint E: Chinese reports with English output produced name translations
+    # (吉宏股份 (Jihong Co.), 日本电产 → Nidec, 广西日报 → Guangxi Daily), points copied in
+    # Chinese, an over-long point, "following the report" between juxtaposed facts, and
+    # detail added in translation.
+    for spec in CROSS_LANGUAGE_PROMPTS.values():
+        system = system_prompt(spec, "en")
+        assert "Write every point in English, even when the reports are in another" in system
+        assert "never copy a whole sentence or clause" in system
+        assert 'never "Tencent (腾讯)"' in system
+        assert "Everything that is not such a name is written in English" in system
+        assert "an attribution (外界认为, analysts said) stays attached to the same claim" in system
+        assert 'with nothing added (never "$100万美元")' in system
+        assert "check every name in your output" in system
+        assert "negations stay negations" in system
+        assert "stay side by side" in system
+        assert "Translate without adding" in system
+        assert "Background knowledge is not evidence" in system
+        assert "under 300 characters" in system
+        assert "{language}" not in system
+        assert system.rstrip().endswith("If a point is not in English, rewrite it in English.")
+        assert "Write every point in Simplified Chinese" in system_prompt(spec, "zh-CN")
+
+
+@pytest.mark.parametrize(
+    ("languages", "locale", "mode"),
+    [
+        (["zh-CN"], "zh-CN", PRIMARY),
+        (["zh-CN", "zh-CN"], "en", CROSS_LANGUAGE),
+        (["en"], "en", PRIMARY),
+        (["en"], "zh-CN", CROSS_LANGUAGE),
+        (["zh"], "zh-CN", PRIMARY),
+        (["en", "zh-CN"], "en", CROSS_LANGUAGE),
+        (["en", "zh-CN"], "zh-CN", CROSS_LANGUAGE),
+    ],
+)
+def test_generation_mode_follows_report_languages(languages, locale, mode):
+    ev = evidence(*(item("Studio A", language=language) for language in languages))
+    assert generation_mode(ev, locale) == mode
+
+
+def test_only_cross_language_requests_carry_the_output_language():
+    ev = evidence(item("广西追加4.2亿元购车补贴", language="zh-CN"))
+    for artifact_type, spec in CROSS_LANGUAGE_PROMPTS.items():
+        assert insight_payload(spec, ev, "en")["output_language"] == "English"
+        assert insight_payload(spec, ev, "zh-CN")["output_language"] == "Simplified Chinese"
+        assert insight_payload(spec, ev, "en")["reports"] == render_event(ev)["reports"]
+        # Primary-locale requests stay exactly as audited in Checkpoint D.
+        assert insight_payload(INSIGHT_PROMPTS[artifact_type], ev, "zh-CN") == render_event(ev)
+
+
+def test_lineages_hash_separately():
+    ev = evidence(item("广西追加4.2亿元购车补贴", language="zh-CN"))
+    for artifact_type, spec in CROSS_LANGUAGE_PROMPTS.items():
+        primary = INSIGHT_PROMPTS[artifact_type]
+        assert input_hash(spec.version, "en", ev) != input_hash(primary.version, "en", ev)
+        assert input_hash(f"{spec.version[:-1]}2", "en", ev) != input_hash(spec.version, "en", ev)
 
 
 def test_every_prompt_carries_the_grounding_rules():
@@ -235,8 +346,154 @@ def test_figures_must_appear_in_the_evidence():
         EVENT_SUMMARY_V4, summary("恩捷股份拟以12亿元收购湖北恩捷45%股权。"), ev, "zh-CN"
     )
     assert any("figures not in evidence ['12']" in error for error in wrong.errors)
-    converted = validate(EVENT_SUMMARY_V4, summary("Enjie plans a RMB 1.15 billion deal."), ev)
-    assert not converted.valid
+    rounded = validate(EVENT_SUMMARY_V4, summary("Enjie plans a RMB 1.2 billion deal."), ev)
+    assert any("figures not in evidence ['1.2']" in error for error in rounded.errors)
+
+
+@pytest.mark.parametrize(
+    ("title", "text"),
+    [
+        ("广西追加4.2亿元购车补贴", "Guangxi added RMB 420 million in car purchase subsidies."),
+        ("计提约1万亿日元（合63亿美元）损失", "A loss of about 1 trillion yen (USD 6.3 billion)."),
+        ("网易4000万美元赌中爆款", "NetEase bet USD 40 million on the game."),
+        ("恩捷股份：拟11.5亿元收购湖北恩捷45%股权", "Enjie plans a RMB 1.15 billion deal for 45%."),
+        ("流动量19946.2万人次", "Cross-regional trips reached 199.462 million."),
+        ("追加4.2亿元资金", "Guangxi added 4.2亿元 in funds."),
+    ],
+)
+def test_exact_chinese_scale_equivalents_in_english_are_allowed_figures(title, text):
+    # Phase 7.1 Checkpoint E: 63亿美元 written as "6.3 billion" was rejected although equal.
+    ev = evidence(item(title, language="zh-CN"))
+    outcome = validate(EVENT_SUMMARY_V4, summary(text), ev)
+    assert outcome.valid, outcome.errors
+
+
+@pytest.mark.parametrize(
+    ("text", "figure"),
+    [
+        ("Guangxi added RMB 42 million in subsidies.", "42"),  # wrong scale
+        ("Guangxi added RMB 420 in subsidies.", "420"),  # no scale word
+        ("Guangxi added RMB 420 thousand in subsidies.", "420"),  # wrong scale word
+        ("Guangxi added RMB 430 million in subsidies.", "430"),  # fabricated
+        ("Guangxi added RMB 420 million and 420 cars.", "420"),  # bare repeat stays checked
+    ],
+)
+def test_wrong_scale_and_invented_figures_still_fail(text, figure):
+    ev = evidence(item("广西追加4.2亿元购车补贴", language="zh-CN"))
+    outcome = validate(EVENT_SUMMARY_V4, summary(text), ev)
+    assert any(f"figures not in evidence ['{figure}']" in error for error in outcome.errors)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "据TechCrunch报道，Anthropic承诺在七年内投入116亿美元，可能增长到约200亿美元。",
+        "Akamai获得价值11.6 billion美元的合同。",
+    ],
+)
+def test_exact_english_scale_equivalents_in_chinese_are_allowed_figures(text):
+    # Phase 7.1 Checkpoint E: $11.6 billion written as 116亿美元 was rejected although equal.
+    ev = evidence(item("Anthropic to pay Akamai $11.6 billion; could grow to about $20 billion"))
+    outcome = validate(EVENT_SUMMARY_XLANG_V1, summary(text), ev, "zh-CN")
+    assert outcome.valid, outcome.errors
+
+
+@pytest.mark.parametrize(
+    ("text", "figure"),
+    [
+        ("Anthropic投入1160亿美元。", "1160"),  # wrong scale
+        ("Anthropic投入117亿美元。", "117"),  # fabricated
+        ("Anthropic投入116美元。", "116"),  # missing scale
+    ],
+)
+def test_wrong_english_to_chinese_scales_still_fail(text, figure):
+    ev = evidence(item("Anthropic to pay Akamai $11.6 billion over seven years"))
+    outcome = validate(EVENT_SUMMARY_XLANG_V1, summary(text), ev, "zh-CN")
+    assert any(f"figures not in evidence ['{figure}']" in error for error in outcome.errors)
+
+
+def test_a_wrong_scale_reusing_the_evidence_digits_is_left_to_manual_audit():
+    # Known limit of the literal figure check: "11.6" appears in the evidence, so 11.6亿 (a
+    # hundredfold error) is not caught deterministically; the manual audit checks every scale.
+    ev = evidence(item("Anthropic to pay Akamai $11.6 billion over seven years"))
+    assert validate(EVENT_SUMMARY_XLANG_V1, summary("Anthropic投入11.6亿美元。"), ev, "zh-CN").valid
+
+
+def test_scale_equivalence_needs_a_chinese_scale_in_the_evidence():
+    ev = evidence(item("Studio A raised $420,000,000"))
+    assert validate(EVENT_SUMMARY_V4, summary("Studio A raised $420,000,000."), ev).valid
+    outcome = validate(EVENT_SUMMARY_V4, summary("Studio A raised $420 million."), ev)
+    assert any("figures not in evidence ['420']" in error for error in outcome.errors)
+
+
+XLANG = EVENT_SUMMARY_XLANG_V1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A report said 日本电产 will book losses, after which its stock price fell 17%.",
+        "日本电产's stock price fell 17% following the report.",
+        "Guangxi added funds; as a result, sales rose.",
+        "The loss led to a management change at 日本电产.",
+        "Studio A cut 17 jobs because of the delay.",
+        "据报道，工作室A宣布裁员，随后股价下跌17%。",
+        "工作室A宣布延期，因此裁员17人。",
+    ],
+)
+def test_cross_language_connectors_need_a_signal_in_the_evidence(text):
+    # Phase 7.1 Checkpoint E: "following the report" and "after which" joined juxtaposed facts.
+    ev = evidence(item("报道称将计提损失 工作室A股价大跌17%", language="zh-CN"))
+    locale = "zh-CN" if "据报道" in text or "宣布延期" in text else "en"
+    outcome = validate(XLANG, summary(text), ev, locale)
+    assert any("unsupported" in error and "connector" in error for error in outcome.errors)
+    # Primary-locale validation is unchanged (Checkpoint D artifacts were audited under it).
+    assert not any(
+        "connector" in e for e in validate(EVENT_SUMMARY_V4, summary(text), ev, locale).errors
+    )
+
+
+def test_cross_language_connectors_pass_with_a_same_kind_evidence_signal():
+    sequence = evidence(item("工作室A宣布裁员，随后股价下跌17%", language="zh-CN"))
+    text = "Studio A announced layoffs; subsequently its stock price fell 17%."
+    assert validate(XLANG, summary(text), sequence).valid
+    causal = evidence(item("工作室A因延期导致裁员17人", language="zh-CN"))
+    assert validate(XLANG, summary("The delay led to 17 layoffs at Studio A."), causal).valid
+    # A sequence signal does not license a causal connector.
+    outcome = validate(XLANG, summary("As a result, its stock price fell 17%."), sequence)
+    assert any("unsupported causal connector" in error for error in outcome.errors)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "吉宏股份 (Jihong Co.) said it has no such cooperation.",
+        "Nidec (日本电产) plans to book a loss.",
+        "The studio was founded by Konrad Tomaszkiewicz (康拉德·托马什凯维奇).",
+        "吉宏股份（Jihong Co.）said it has no such cooperation.",
+    ],
+)
+def test_cross_language_name_glosses_need_both_forms_in_the_evidence(text):
+    # Phase 7.1 Checkpoint E: names were glossed or translated with forms no report gives.
+    ev = evidence(
+        item("吉宏股份：未有合作", language="zh-CN"),
+        item("日本电产将计提损失，康拉德·托马什凯维奇创立工作室", language="zh-CN"),
+    )
+    outcome = validate(XLANG, summary(text), ev)
+    assert any("name gloss not in evidence" in error for error in outcome.errors)
+
+
+def test_figures_quotes_and_given_glosses_are_not_name_glosses():
+    ev = evidence(
+        item("广西追加4.2亿元购车补贴；腾讯（Tencent）发布“不加班”", language="zh-CN"),
+    )
+    for text in (
+        "Guangxi added RMB 420 million (4.2亿元) in subsidies.",
+        "腾讯 (Tencent) described '不加班' (no overtime).",
+        "The subsidy covers the vehicle license (行驶证) date.",
+    ):
+        outcome = validate(XLANG, summary(text), ev)
+        assert outcome.valid, outcome.errors
 
 
 def test_publication_dates_and_small_counts_are_allowed_figures():

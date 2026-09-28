@@ -466,7 +466,7 @@ export function fetchEventContent(
  * AI text is an interpretation of the listed reports, never a canonical fact.
  */
 export type AIInsightType = "event_summary" | "event_why_it_matters";
-export type AIInsightState = "available" | "not_generated" | "failed" | "stale";
+export type AIInsightState = "available" | "not_generated" | "failed" | "rejected" | "stale";
 export interface AIEvidence {
   content_id: string; position: number; source: string; title: string; url: string;
   language: string; published_at: string | null;

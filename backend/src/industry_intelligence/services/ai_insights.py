@@ -1,12 +1,16 @@
 """Read model for displayable Event AI insights; persisted data only, never a provider call.
 
 For each insight type the current evidence hash is recomputed from the Event's persisted
-content, so staleness never depends on a batch having run:
+content with the prompt of the deterministic generation mode (primary-locale or cross-language
+lineage), so staleness never depends on a batch having run and a change in one lineage never
+makes the other stale:
 
 * ``available``: a ``valid`` artifact built from exactly the current evidence and prompt;
 * ``failed``: the latest attempt for the current evidence failed and no valid artifact exists;
-* ``stale``: artifacts exist only for older evidence (the Event changed); their text is not
-  returned, because it may no longer describe the Event;
+* ``rejected``: a reviewer withdrew the latest artifact for the current evidence
+  (``ai-artifact-reject``); its text is never returned;
+* ``stale``: artifacts exist only for older evidence or an older prompt version; their text is
+  not returned, because it may no longer describe the Event;
 * ``not_generated``: nothing was generated (for example no AI provider is configured).
 
 Pending entity or merge suggestions are review material and are never returned here.
@@ -16,10 +20,14 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS
+from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS, insight_spec
 from industry_intelligence.db.models import AIArtifact
 from industry_intelligence.services.ai_enrichment import ENTITY_EVENT
-from industry_intelligence.services.ai_evidence import input_hash, load_event_evidence
+from industry_intelligence.services.ai_evidence import (
+    generation_mode,
+    input_hash,
+    load_event_evidence,
+)
 from industry_intelligence.services.events import resolve_event_redirect
 
 
@@ -41,7 +49,7 @@ def _evidence_row(item, position):
 
 def _insight(spec, evidence, artifacts, locale):
     digest = input_hash(spec.version, locale, evidence)
-    current = [a for a in artifacts if a.input_hash == digest and a.status != "rejected"]
+    current = [a for a in artifacts if a.input_hash == digest]
     valid = [a for a in current if a.status == "valid"]
     if valid:
         artifact = max(valid, key=lambda a: a.generated_at)
@@ -74,6 +82,10 @@ def _insight(spec, evidence, artifacts, locale):
         }
     if current:
         latest = max(current, key=lambda a: a.generated_at)
+        if latest.status == "rejected":
+            # Phase 7.1 Checkpoint F: a reviewer withdrew the latest artifact for the current
+            # evidence; it was reported as "stale" (reports changed), which was not true.
+            return {"state": "rejected", "artifact": None}
         return {"state": "failed", "artifact": None, "error_code": latest.error_code}
     if any(a.status in {"valid", "stale"} for a in artifacts):
         return {"state": "stale", "artifact": None}
@@ -95,6 +107,7 @@ def event_ai(session, event_id, locale="en"):
             AIArtifact.artifact_type.in_(list(INSIGHT_PROMPTS)),
         )
     ).all()
+    mode = generation_mode(evidence, locale)
     by_type = {}
     for artifact in artifacts:
         by_type.setdefault(artifact.artifact_type, []).append(artifact)
@@ -108,7 +121,9 @@ def event_ai(session, event_id, locale="en"):
         "source_count": evidence.source_count,
         "single_source": evidence.source_count == 1,
         "insights": {
-            artifact_type: _insight(spec, evidence, by_type.get(artifact_type, []), locale)
-            for artifact_type, spec in INSIGHT_PROMPTS.items()
+            artifact_type: _insight(
+                insight_spec(artifact_type, mode), evidence, by_type.get(artifact_type, []), locale
+            )
+            for artifact_type in INSIGHT_PROMPTS
         },
     }

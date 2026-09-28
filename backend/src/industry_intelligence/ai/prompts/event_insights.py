@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -152,3 +153,81 @@ Do not add sequence words such as earlier, later, before, after, following, subs
 )
 
 INSIGHT_PROMPTS = {spec.artifact_type: spec for spec in (EVENT_SUMMARY_V4, EVENT_WHY_IT_MATTERS_V6)}
+
+
+# --- Cross-language lineage (Phase 7.1 Checkpoint E) -------------------------------------------
+# Output in a language other than the reports' uses its own prompt versions, so translation
+# rules never change the primary-locale prompts above (whose artifacts were audited in
+# Checkpoint D) and a change here never makes primary-locale artifacts stale. The xlang prompts
+# are the primary text plus the rules below; they are chosen by ``insight_spec`` from the
+# deterministic generation mode (``ai_evidence.generation_mode``).
+#
+# The rules come from the Checkpoint E live runs with Chinese reports and English output, which
+# produced name glosses and translations (吉宏股份 (Jihong Co.), 日本电产 → Nidec, 广西日报 →
+# Guangxi Daily), points copied in Chinese, added qualifiers and background knowledge,
+# connectors between juxtaposed facts, places and ordinary words left untranslated, and
+# over-long points. Connectors and parenthetical name glosses are also rejected by
+# deterministic guards (``ai_evidence``), because the prompt alone did not prevent them.
+OUTPUT_LANGUAGE_RULES = """\
+Output language and length:
+- Write every point in {language}, even when the reports are in another language: restate \
+what the reports say in {language}; never copy a whole sentence or clause of a report in \
+another language. Only names and short quoted phrases may stay in the report's language.
+- Proper names stay exactly as the reports write them, in the reports' own script: names of \
+companies, people, media outlets, organizations, games, products, and named programs. Do not \
+translate, romanize, or explain such a name, and do not add a version in another language (for \
+example in parentheses) unless a report itself gives it. This holds even when you know the \
+official name in {language}: a company the reports call 腾讯 stays 腾讯 in English output \
+(never Tencent, and never "Tencent (腾讯)"), a newspaper called 人民日报 stays 人民日报, a person \
+called 张三 stays 张三, and a company the reports call Tencent stays Tencent in Chinese output \
+(never 腾讯). An English sentence containing Chinese-script names, such as "According to \
+新浪财经, 腾讯 said …", is the expected form.
+- Everything that is not such a name is written in {language}: countries, regions, and cities \
+(日本 is Japan), job titles (董事长 is chairman), descriptions of a person or company (创始人 \
+is founder), and ordinary words (电动汽车 is electric vehicle).
+- Before answering, check every name in your output: if it does not appear character for \
+character in a report, replace it with the report's own form.
+- Restating in another language must not change meaning: hedges (may, could, reportedly, \
+about, 拟, 预计, 约, 有报道称) stay hedged, plans stay plans, negations stay negations, figures \
+keep the report's digits and units with nothing added (never "$100万美元"), an attribution \
+(外界认为, analysts said) stays attached to the same claim, and facts that a report only places \
+side by side stay side by side (never join them with following, after, amid, as a result, or \
+此后).
+- Translate without adding: no qualifier the report does not use (不收费 is "free of charge", \
+not "free of charge for now"), and never make a statement more specific than the report, for \
+example by saying what an investment, payment, or bet went to when the report does not say. \
+Background knowledge is not evidence, even when you are certain it is true.
+- Keep each point under 300 characters."""
+
+FINAL_LANGUAGE_CHECK = """\
+Final check before answering: the input's output_language is {language}. Every point must be \
+written in {language}; only names and short quoted phrases may be in another language. If a \
+point is not in {language}, rewrite it in {language}."""
+
+
+def _cross_language(spec, version):
+    system = spec.system.replace(
+        GROUNDING_RULES,
+        f"{OUTPUT_LANGUAGE_RULES}\n\n{GROUNDING_RULES}\n\n{FINAL_LANGUAGE_CHECK}",
+    )
+    assert system != spec.system
+    return replace(spec, version=version, system=system, cross_language=True)
+
+
+EVENT_SUMMARY_XLANG_V1 = _cross_language(EVENT_SUMMARY_V4, "event_summary_xlang_v1")
+EVENT_WHY_IT_MATTERS_XLANG_V1 = _cross_language(
+    EVENT_WHY_IT_MATTERS_V6, "event_why_it_matters_xlang_v1"
+)
+
+PRIMARY = "primary"
+CROSS_LANGUAGE = "cross_language"
+CROSS_LANGUAGE_PROMPTS = {
+    spec.artifact_type: spec for spec in (EVENT_SUMMARY_XLANG_V1, EVENT_WHY_IT_MATTERS_XLANG_V1)
+}
+
+
+def insight_spec(artifact_type, mode):
+    """The prompt of one insight type for a generation mode (``primary`` or ``cross_language``)."""
+
+    prompts = CROSS_LANGUAGE_PROMPTS if mode == CROSS_LANGUAGE else INSIGHT_PROMPTS
+    return prompts[artifact_type]

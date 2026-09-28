@@ -21,7 +21,8 @@ const aiCopy = {
     basis: (reports: number, sources: number) => sources === 1 ? `Based on ${reports === 1 ? "1 report" : `${reports} reports`} from a single source.` : `Based on ${reports} reports from ${sources} sources.`,
     evidence: "Sources", notGenerated: "AI insight not available for this event.",
     failed: "AI insight is unavailable: the last generation attempt failed validation or the AI provider returned an error.",
-    stale: "AI insight is not shown because the event's reports changed after it was generated.",
+    rejected: "AI insight was withdrawn after review and is not shown.",
+    stale: "AI insight is not shown because it was generated from earlier reports or earlier AI instructions.",
     insufficientWhy: "The reports do not give enough context to explain why this matters.",
     insufficientSummary: "The reports are brief; this summary only restates what they report.",
     unavailable: "AI insight not available.",
@@ -34,7 +35,8 @@ const aiCopy = {
     basis: (reports: number, sources: number) => sources === 1 ? `依据单一来源的 ${reports} 篇报道。` : `依据 ${sources} 个来源的 ${reports} 篇报道。`,
     evidence: "来源", notGenerated: "该事件暂无 AI 解读。",
     failed: "AI 解读暂不可用：最近一次生成未通过校验，或 AI 服务返回错误。",
-    stale: "事件的报道在生成后发生了变化，因此不显示旧的 AI 解读。",
+    rejected: "AI 解读经人工审核后已撤下，不予显示。",
+    stale: "AI 解读基于较早的报道或较早的 AI 指令生成，因此不予显示。",
     insufficientWhy: "现有报道不足以说明该事件为何值得关注。",
     insufficientSummary: "报道内容较少，此摘要仅复述报道所述内容。",
     unavailable: "AI 解读暂不可用。",
@@ -47,7 +49,11 @@ function AIInsightCard({ kind, insight, locale }: { kind: AIInsightType; insight
   const t = aiCopy[locale];
   const title = kind === "event_summary" ? t.summary : t.why;
   const artifact = insight.state === "available" ? insight.artifact : null;
-  const message = insight.state === "failed" ? t.failed : insight.state === "stale" ? t.stale : t.notGenerated;
+  const message =
+    insight.state === "failed" ? t.failed
+      : insight.state === "rejected" ? t.rejected
+        : insight.state === "stale" ? t.stale
+          : t.notGenerated;
   return <section className="ranking-card ai-card" aria-labelledby={`ai-${kind}`}>
     <h2 id={`ai-${kind}`}>{title}{artifact && <span className="tag ai-badge">{t.badge}</span>}</h2>
     {!artifact && <p className="empty">{message}</p>}

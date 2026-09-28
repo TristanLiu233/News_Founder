@@ -23,6 +23,9 @@ class PromptSpec:
     output_model: type[BaseModel]
     # Whether the output is written in the requested UI locale.
     localized: bool = True
+    # Output in a language other than the evidence's (Phase 7.1 Checkpoint E): the request
+    # repeats the output language and cross-language guards apply (``ai_evidence``).
+    cross_language: bool = False
 
 
 def object_schema(properties, required=None):

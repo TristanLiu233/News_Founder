@@ -9,8 +9,13 @@ prompt's Pydantic model *and* these deterministic guards:
 * no investment advice, price targets, ratings, or market predictions;
 * a single-source Event is never described as multiple reports or a consensus;
 * every figure in the output appears in the evidence (titles, excerpts, publication dates), so a
-  wrong or invented number fails validation;
-* the text is in the requested locale's language.
+  wrong or invented number fails validation; the only exception is a scaled figure whose value
+  exactly equals an evidence figure in the other notation (4.2亿 → 420 million, $11.6 billion →
+  116亿);
+* the text is in the requested locale's language;
+* for cross-language output (Phase 7.1 Checkpoint E), no sequence/causal connector unless the
+  evidence has one of the same kind, and no parenthetical name gloss between Latin and Chinese
+  script unless the evidence contains both forms.
 
 A failed guard fails the whole artifact; nothing is repaired or partially kept.
 """
@@ -23,10 +28,12 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
+from industry_intelligence.ai.prompts.event_insights import CROSS_LANGUAGE, PRIMARY
 from industry_intelligence.db.models import ContentItem, Event, EventContentLink, Source
 
 MAX_EVIDENCE_ITEMS = 20
@@ -36,6 +43,19 @@ EFFECTIVE_AT = func.coalesce(ContentItem.published_at, ContentItem.observed_at)
 _CJK = re.compile(r"[㐀-鿿豈-﫿]")
 _LATIN = re.compile(r"[A-Za-z]")
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
+# Phase 7.1 Checkpoint E: a Chinese report's 63亿美元 written as "6.3 billion" in English
+# output, and an English report's $11.6 billion written as 116亿美元 in Chinese output, were
+# rejected although the values are identical. Only this exact scale equivalence between the two
+# notations is accepted (Decimal arithmetic; the figure must carry its scale word or character).
+_CJK_SCALED = re.compile(r"(\d+(?:\.\d+)?)\s*(万亿|亿|万)")
+_EN_SCALED = re.compile(r"(\d+(?:[.,]\d+)*)\s*(thousand|million|billion|trillion)\b", re.I)
+_CJK_SCALES = {"万": Decimal(10**4), "亿": Decimal(10**8), "万亿": Decimal(10**12)}
+_EN_SCALES = {
+    "thousand": Decimal(10**3),
+    "million": Decimal(10**6),
+    "billion": Decimal(10**9),
+    "trillion": Decimal(10**12),
+}
 _PROHIBITED = re.compile(
     r"\b(?:buy|sell|hold|overweight|underweight|outperform|underperform)"
     r"(?: rating| recommendation| call)\b|\bprice targets?\b|\btarget prices?\b|"
@@ -51,6 +71,45 @@ _CONSENSUS = re.compile(
     r"\breports indicate\b|\bsources say\b|\bwidely reported\b|\bconsensus\b|"
     r"多家(?:媒体|来源|机构)|多方(?:报道|消息|来源)|多个来源|据多|多篇报道|普遍报道",
     re.IGNORECASE,
+)
+
+
+# Cross-language guards (Phase 7.1 Checkpoint E). Live English output of Chinese reports joined
+# juxtaposed facts ("following the report", "after which") and glossed names ("吉宏股份 (Jihong
+# Co.)"); Checkpoint D saw the same connectors in Chinese ("消息传出后", "受此影响"). Only these
+# small, explicit forms are checked: a connector is allowed when the evidence has a signal of the
+# same kind, and a Latin/Chinese name pair in parentheses only when the evidence has both forms.
+_CONNECTORS = {
+    "sequence": re.compile(
+        r"\b(?:after which|afterwards?|subsequently|thereafter|"
+        r"following (?:the|this|that|these|those|its|their|his|her)|"
+        r"after the (?:news|reports?|announcement|disclosure|move))\b|"
+        r"随后|此后|其后|之后|消息传出后",
+        re.IGNORECASE,
+    ),
+    "causal": re.compile(
+        r"\b(?:as a result|therefore|consequently|thus|hence|leading to|led to|lead to|"
+        r"resulted in|resulting in|due to|because|in response to)\b|"
+        r"因此|因而|所以|从而|导致|由于|因为|受此影响",
+        re.IGNORECASE,
+    ),
+}
+_EVIDENCE_SIGNALS = {
+    "sequence": re.compile(
+        r"\b(?:after|afterwards?|following|subsequently|later)\b|随后|之后|此后|其后|然后|后来",
+        re.IGNORECASE,
+    ),
+    "causal": re.compile(
+        r"\b(?:because|therefore|as a result|leading to|led to|due to|consequently|thus|hence|"
+        r"resulted in)\b|因此|因而|所以|从而|导致|由于|因为|受此影响",
+        re.IGNORECASE,
+    ),
+}
+_CJK_NAME = r"[㐀-鿿豈-﫿·・]+"
+_LATIN_NAME = r"[A-Z][A-Za-z0-9&.'-]*(?:\s+[A-Z][A-Za-z0-9&.'-]*)*"
+_GLOSSES = (
+    re.compile(rf"(?P<name>{_CJK_NAME})\s*\(\s*(?P<gloss>[A-Z][A-Za-z&.' -]*[A-Za-z.])\s*\)"),
+    re.compile(rf"(?P<name>{_LATIN_NAME})\s*\(\s*(?P<gloss>{_CJK_NAME})\s*\)"),
 )
 
 
@@ -223,6 +282,73 @@ def evidence_numbers(items):
     return numbers
 
 
+def _scaled_value(number, scale):
+    scales = _CJK_SCALES if scale in _CJK_SCALES else _EN_SCALES
+    return Decimal(number.replace(",", "")) * scales[scale.lower()]
+
+
+def evidence_scaled_values(items):
+    """Exact values of the evidence's scaled figures, by notation (4.2亿 → 420000000)."""
+
+    text = _nfkc("\n".join(item.text() for item in items))
+    return {
+        "cjk": {_scaled_value(*match) for match in _CJK_SCALED.findall(text)},
+        "en": {_scaled_value(*match) for match in _EN_SCALED.findall(text)},
+    }
+
+
+def _without_equivalent_scaled_figures(text, scaled_values):
+    """``text`` minus scaled figures whose value exactly equals an evidence figure written in the
+    other notation (4.2亿 → 420 million; $11.6 billion → 116亿)."""
+
+    def replacer(other):
+        def replace(match):
+            value = _scaled_value(match.group(1), match.group(2))
+            return " " if value in scaled_values[other] else match.group(0)
+
+        return replace
+
+    text = _EN_SCALED.sub(replacer("cjk"), text)
+    return _CJK_SCALED.sub(replacer("en"), text)
+
+
+def _locale_of(language):
+    language = (language or "").lower()
+    if language.startswith("zh"):
+        return "zh-CN"
+    if language.startswith("en"):
+        return "en"
+    return language
+
+
+def generation_mode(evidence, locale):
+    """``primary`` when every report is in ``locale``'s language, else ``cross_language``.
+
+    Deterministic, from the persisted ContentItem languages only; it selects the prompt lineage
+    (``event_insights.insight_spec``), so each (Event, type, locale) has exactly one lineage.
+    """
+
+    if evidence.items and all(_locale_of(item.language) == locale for item in evidence.items):
+        return PRIMARY
+    return CROSS_LANGUAGE
+
+
+def cross_language_errors(text, evidence_text):
+    """Unsupported connectors and parenthetical name glosses in cross-language output."""
+
+    errors = []
+    for kind, connector in _CONNECTORS.items():
+        match = connector.search(text)
+        if match and not _EVIDENCE_SIGNALS[kind].search(evidence_text):
+            errors.append(f"unsupported {kind} connector {match.group(0)!r}: {text[:80]!r}")
+    for gloss in _GLOSSES:
+        for match in gloss.finditer(text):
+            name, translated = match.group("name"), match.group("gloss")
+            if name not in evidence_text or translated not in evidence_text:
+                errors.append(f"name gloss not in evidence {match.group(0)!r}: {text[:80]!r}")
+    return errors
+
+
 def _language_ok(text, locale):
     cjk = len(_CJK.findall(text))
     latin = len(_LATIN.findall(text))
@@ -265,6 +391,8 @@ def validate_output(spec, data, mapping, items, locale=None, source_count=None):
         if key in output:
             output[key] = _map_refs(output[key], mapping, errors, key)
     allowed_numbers = evidence_numbers(items)
+    scaled_values = evidence_scaled_values(items)
+    evidence_text = _nfkc("\n".join(f"{item.source}\n{item.text()}" for item in items))
     for text in _texts(output):
         if _PROHIBITED.search(_nfkc(text)):
             errors.append(f"prohibited advice or prediction: {text[:80]!r}")
@@ -272,11 +400,13 @@ def validate_output(spec, data, mapping, items, locale=None, source_count=None):
             errors.append(f"single-source Event described as multiple reports: {text[:80]!r}")
         unknown = {
             number
-            for number in _numbers(text)
+            for number in _numbers(_without_equivalent_scaled_figures(_nfkc(text), scaled_values))
             if number not in allowed_numbers and not (number.isdigit() and int(number) < 10)
         }
         if unknown:
             errors.append(f"figures not in evidence {sorted(unknown)}: {text[:80]!r}")
         if spec.localized and locale and not _language_ok(text, locale):
             errors.append(f"text is not in locale {locale}: {text[:80]!r}")
+        if spec.cross_language:
+            errors.extend(cross_language_errors(_nfkc(text), evidence_text))
     return ValidationOutcome(None if errors else output, errors)

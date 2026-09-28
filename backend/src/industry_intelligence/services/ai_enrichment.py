@@ -1,8 +1,9 @@
 """Bounded, cached, incremental AI enrichment of Events (CLI-only; never on a page request).
 
-For each selected Event, artifact type, and locale the evidence hash is computed from persisted
-data. A ``valid`` artifact with the same hash, provider, and model is a replay (no request);
-older ``valid`` artifacts of the same Event/type/locale with a different hash are marked
+For each selected Event, artifact type, and locale the prompt is chosen by the deterministic
+generation mode (primary-locale or cross-language lineage) and the evidence hash is computed
+from persisted data. A ``valid`` artifact with the same hash, provider, and model is a replay (no
+request); older ``valid`` artifacts of the same Event/type/locale with a different hash are marked
 ``stale``. Otherwise one provider request is made, the output is validated
 (``ai_evidence.validate_output``), and exactly one row is written: ``valid`` with the output, or
 ``failed`` with a short error code (no output kept). Every task commits on its own, so one
@@ -18,11 +19,12 @@ from uuid import uuid4
 from sqlalchemy import select, update
 
 from industry_intelligence.ai.prompts import LANGUAGE_NAMES
-from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS
+from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS, insight_spec
 from industry_intelligence.ai.provider import AIProviderError, generate_with_retry
 from industry_intelligence.ai.providers import build_provider
 from industry_intelligence.db.models import AIArtifact, Event, EventRedirect
 from industry_intelligence.services.ai_evidence import (
+    generation_mode,
     input_hash,
     load_event_evidence,
     ref_map,
@@ -41,6 +43,21 @@ MAX_LIMIT = 100
 def system_prompt(spec, locale):
     language = LANGUAGE_NAMES.get(locale, "English") if spec.localized else "English"
     return spec.system.replace("{language}", language)
+
+
+def insight_payload(spec, evidence, locale):
+    """The user message payload of one insight task: the Event, plus the output language for
+    cross-language prompts.
+
+    Phase 7.1 Checkpoint E: with Chinese reports, English output was written in Chinese when
+    the language was named only in the system prompt, so cross-language requests repeat it next
+    to the reports. Primary-locale requests stay exactly as audited in Checkpoint D.
+    """
+
+    payload = render_event(evidence)
+    if spec.cross_language:
+        payload["output_language"] = LANGUAGE_NAMES.get(locale, "English")
+    return payload
 
 
 def select_events(
@@ -164,8 +181,8 @@ def _plan(session, events, artifact_types, locales, provider):
         if evidence is None or not evidence.items:
             continue
         for artifact_type in artifact_types:
-            spec = INSIGHT_PROMPTS[artifact_type]
             for locale in locales:
+                spec = insight_spec(artifact_type, generation_mode(evidence, locale))
                 digest = input_hash(spec.version, locale, evidence)
                 cached = find_cached(
                     session,
@@ -284,7 +301,7 @@ async def enrich_events(
             entity_key=event_key,
             locale=task["locale"],
             digest=task["digest"],
-            payload=render_event(evidence),
+            payload=insight_payload(task["spec"], evidence, task["locale"]),
             mapping=ref_map(evidence),
             items=evidence.items,
             source_count=evidence.source_count,

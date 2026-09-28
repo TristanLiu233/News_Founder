@@ -7,6 +7,7 @@ fixture rolls everything back.
 """
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from industry_intelligence.ai.prompts import event_insights
 from industry_intelligence.ai.provider import AITimeout
 from industry_intelligence.ai.providers.fixture import FixtureProvider
 from industry_intelligence.config import get_settings
@@ -277,6 +279,100 @@ def test_changed_event_evidence_makes_old_artifacts_stale(db, factory, settings,
     assert event_ai(db, event.id, "en")["insights"]["event_summary"]["state"] == "available"
 
 
+def test_primary_and_cross_language_lineages_go_stale_independently(
+    db, factory, settings, sources, tag, monkeypatch
+):
+    # Phase 7.1 Checkpoint E: an English Event's en output is primary-locale, its zh-CN output
+    # cross-language; a prompt change in one lineage never makes the other stale.
+    event, _ = make_event(db, sources[0], f"Studio {tag} announces new game")
+
+    def enrich(dry_run=False):
+        return run(
+            enrich_events(
+                settings,
+                factory,
+                event_ids=[event.id],
+                artifact_types=("event_summary",),
+                provider=FixtureProvider(insight_responder),
+                dry_run=dry_run,
+            )
+        )
+
+    assert enrich()["generated"] == 2
+    versions = {a.locale: a.prompt_version for a in artifacts(db, event.id, status="valid")}
+    assert versions == {"en": "event_summary_v4", "zh-CN": "event_summary_xlang_v1"}
+
+    def states():
+        return {
+            locale: event_ai(db, event.id, locale)["insights"]["event_summary"]["state"]
+            for locale in ("en", "zh-CN")
+        }
+
+    assert states() == {"en": "available", "zh-CN": "available"}
+    xlang = event_insights.CROSS_LANGUAGE_PROMPTS["event_summary"]
+    monkeypatch.setitem(
+        event_insights.CROSS_LANGUAGE_PROMPTS,
+        "event_summary",
+        replace(xlang, version="event_summary_xlang_v2"),
+    )
+    assert states() == {"en": "available", "zh-CN": "stale"}
+    plan = enrich(dry_run=True)
+    assert (plan["cached"], plan["stale"], plan["would_generate"]) == (1, 1, 1)
+    monkeypatch.setitem(event_insights.CROSS_LANGUAGE_PROMPTS, "event_summary", xlang)
+    primary = event_insights.INSIGHT_PROMPTS["event_summary"]
+    monkeypatch.setitem(
+        event_insights.INSIGHT_PROMPTS,
+        "event_summary",
+        replace(primary, version="event_summary_v99"),
+    )
+    assert states() == {"en": "stale", "zh-CN": "available"}
+    result = enrich()
+    assert (result["requests"], result["stale_marked"]) == (1, 1)
+    assert states() == {"en": "available", "zh-CN": "available"}
+    zh = [a for a in artifacts(db, event.id, locale="zh-CN") if a.status == "valid"]
+    assert [a.prompt_version for a in zh] == ["event_summary_xlang_v1"]
+    # Phase 7.1 Checkpoint F: rejecting the current artifact while older-version rows exist
+    # reads "rejected", never "stale" (the reports did not change).
+    current_en = event_ai(db, event.id, "en")["insights"]["event_summary"]["artifact"]["id"]
+    reject_artifact(db, UUID(current_en), "manual audit: unsupported wording")
+    assert artifacts(db, event.id, locale="en", status="stale")
+    assert states() == {"en": "rejected", "zh-CN": "available"}
+
+
+def test_rejected_artifact_is_never_served_and_regenerates_once(
+    db, factory, settings, sources, tag
+):
+    event, _ = make_event(db, sources[0], f"Studio {tag} announces new game")
+
+    def enrich():
+        return run(
+            enrich_events(
+                settings,
+                factory,
+                event_ids=[event.id],
+                locales=("zh-CN",),
+                artifact_types=("event_summary",),
+                provider=FixtureProvider(insight_responder),
+            )
+        )
+
+    enrich()
+    first = event_ai(db, event.id, "zh-CN")["insights"]["event_summary"]["artifact"]["id"]
+    reject_artifact(db, UUID(first), "manual audit: unsupported wording")
+    db.commit()
+    app = create_app(settings)
+    app.dependency_overrides[get_db_session] = lambda: db
+    with TestClient(app) as client:
+        body = client.get(f"/api/v1/events/{event.id}/ai", params={"locale": "zh-CN"}).json()
+        assert body["insights"]["event_summary"] == {"state": "rejected", "artifact": None}
+        result = enrich()
+        assert (result["requests"], result["generated"]) == (1, 1)
+        body = client.get(f"/api/v1/events/{event.id}/ai", params={"locale": "zh-CN"}).json()
+        summary = body["insights"]["event_summary"]
+        assert summary["state"] == "available" and summary["artifact"]["id"] != first
+    assert db.get(AIArtifact, UUID(first)).status == "rejected"
+
+
 def test_one_failure_does_not_roll_back_other_events(db, factory, settings, sources, tag):
     good, _ = make_event(db, sources[0], f"Studio {tag} announces new game")
     bad, _ = make_event(
@@ -367,7 +463,10 @@ def test_read_model_states_evidence_metadata_and_rejection(db, factory, settings
     assert why["insufficient_evidence"] is True and why["points"] == []
     assert event_ai(db, event.id, "en")["insights"]["event_summary"]["state"] == "not_generated"
     reject_artifact(db, UUID(summary["artifact"]["id"]), "reviewer found an inaccuracy")
-    assert event_ai(db, event.id, "zh-CN")["insights"]["event_summary"]["state"] == "not_generated"
+    assert event_ai(db, event.id, "zh-CN")["insights"]["event_summary"] == {
+        "state": "rejected",
+        "artifact": None,
+    }
     assert event_ai(db, uuid4(), "en") is None
 
 
