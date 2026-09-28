@@ -12,8 +12,9 @@ content published in ``[start, end)`` (``coalesce(published_at, observed_at)``, 
   Cluster membership, not the ID, is the stable result: the same content, rules, and window
   produce the same partition;
 * a window touching a reviewed merge (an ``EventRedirect`` on either side, or a content link
-  carrying ``reviewed_merge`` evidence) is refused, because a rebuild would discard a human
-  decision;
+  carrying ``reviewed_merge`` evidence) or an Event with a reviewed Company link (Phase 7) is
+  refused, because a rebuild would discard a human decision (reviewed content ↔ subject links
+  live on content and survive a rebuild);
 * ``dry_run`` is handled by the caller rolling back the transaction.
 """
 
@@ -32,6 +33,7 @@ from industry_intelligence.db.models import (
     EventSubjectLink,
     Source,
 )
+from industry_intelligence.services.content_linking import REVIEWED_STRATEGY
 from industry_intelligence.services.event_ingestion import (
     EFFECTIVE_AT,
     LOCK_KEY,
@@ -133,6 +135,19 @@ def rebuild_events(session, start, end):
         raise EventRebuildRefused(
             "window contains reviewed-merged Events: "
             + ", ".join(sorted(str(event_id) for event_id in reviewed))
+        )
+    reviewed_links = set(
+        session.scalars(
+            select(EventCompanyLink.event_id).where(
+                EventCompanyLink.event_id.in_(list(affected)),
+                EventCompanyLink.strategy == REVIEWED_STRATEGY,
+            )
+        )
+    )
+    if reviewed_links:
+        raise EventRebuildRefused(
+            "window contains Events with reviewed Company links: "
+            + ", ".join(sorted(str(event_id) for event_id in reviewed_links))
         )
     old = _partition(session, affected)
     content_ids = window_ids | set().union(*old.values()) if old else set(window_ids)

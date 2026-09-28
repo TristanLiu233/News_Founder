@@ -24,6 +24,7 @@ from industry_intelligence.db.models import (
     EventRedirect,
     EventSubjectLink,
 )
+from industry_intelligence.services.content_linking import REVIEWED_STRATEGY
 from industry_intelligence.services.event_ingestion import (
     LOCK_KEY,
     refresh_event,
@@ -90,6 +91,19 @@ def merge_events(session, canonical_id, duplicate_id, reason):
             **(link.evidence or {}),
             "reviewed_merge": {"from_event_id": str(duplicate_id), "reason": reason},
         }
+    session.flush()
+    # Reviewed Company links follow their content to the canonical Event.
+    held = _linked(session, EventCompanyLink, EventCompanyLink.company_id, canonical_id)
+    for link in session.scalars(
+        select(EventCompanyLink).where(
+            EventCompanyLink.event_id == duplicate_id,
+            EventCompanyLink.strategy == REVIEWED_STRATEGY,
+        )
+    ).all():
+        if link.company_id in held:
+            session.delete(link)
+        else:
+            link.event_id = canonical_id
     session.flush()
     session.execute(
         update(EventRedirect)

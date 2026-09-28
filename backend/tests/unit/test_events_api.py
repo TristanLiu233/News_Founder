@@ -37,3 +37,12 @@ def test_event_detail_rejects_malformed_ids(client):
 def test_event_routes_are_read_only(client):
     assert client.post("/api/v1/events").status_code == 405
     assert client.post(f"/api/v1/events/{uuid4()}").status_code == 405
+
+
+def test_event_ai_rejects_invalid_locale_and_ids(client):
+    assert client.get(f"/api/v1/events/{uuid4()}/ai", params={"locale": "fr"}).status_code == 422
+    assert client.get("/api/v1/events/not-a-uuid/ai").status_code == 422
+
+
+def test_event_ai_route_is_read_only(client):
+    assert client.post(f"/api/v1/events/{uuid4()}/ai").status_code == 405

@@ -91,6 +91,47 @@ def main():
     event_merge.add_argument("canonical", type=UUID)
     event_merge.add_argument("duplicate", type=UUID)
     event_merge.add_argument("--reason", required=True)
+    # Phase 7 AI enrichment: bounded, cached, CLI-only; --dry-run sends no provider request.
+    ai_enrich = sub.add_parser("ai-event-enrich")
+    ai_suggest = sub.add_parser("ai-entity-suggest")
+    ai_merge = sub.add_parser("ai-merge-suggest")
+    for ai_parser in (ai_enrich, ai_suggest, ai_merge):
+        ai_parser.add_argument("--since", type=_aware_datetime)
+        ai_parser.add_argument("--domain", choices=list(Domain))
+        ai_parser.add_argument("--limit", type=int, default=10)
+        ai_parser.add_argument("--dry-run", action="store_true")
+    for ai_parser in (ai_enrich, ai_suggest):
+        ai_parser.add_argument("--event-id", action="append", type=UUID)
+    ai_enrich.add_argument("--locale", action="append", choices=["en", "zh-CN"])
+    ai_enrich.add_argument(
+        "--type", action="append", choices=["event_summary", "event_why_it_matters"]
+    )
+    ai_list = sub.add_parser("ai-suggestion-list")
+    ai_list.add_argument(
+        "--status", default="pending", choices=["pending", "accepted", "rejected", "all"]
+    )
+    ai_list.add_argument(
+        "--type",
+        choices=[
+            "event_subject_candidate",
+            "event_company_candidate",
+            "new_entity_candidate",
+            "event_merge_candidate",
+        ],
+    )
+    ai_list.add_argument("--limit", type=int, default=50)
+    ai_accept = sub.add_parser("ai-suggestion-accept")
+    # A reviewed action through existing services; merges keep every Event merge safeguard.
+    ai_accept.add_argument("suggestion", type=UUID)
+    ai_accept.add_argument("--reason", required=True)
+    ai_accept.add_argument("--candidate", type=UUID)
+    ai_accept.add_argument("--canonical", type=UUID)
+    ai_reject = sub.add_parser("ai-suggestion-reject")
+    ai_reject.add_argument("suggestion", type=UUID)
+    ai_reject.add_argument("--reason", required=True)
+    ai_hide = sub.add_parser("ai-artifact-reject")
+    ai_hide.add_argument("artifact", type=UUID)
+    ai_hide.add_argument("--reason", required=True)
     args = parser.parse_args()
     settings = get_settings()
     configure_logging(settings)
@@ -207,6 +248,70 @@ def main():
 
             with factory.begin() as session:
                 result = merge_events(session, args.canonical, args.duplicate, args.reason)
+        elif args.command in {"ai-event-enrich", "ai-entity-suggest", "ai-merge-suggest"}:
+            from industry_intelligence.ai.provider import AIProviderNotConfigured
+            from industry_intelligence.services.ai_enrichment import LOCALES, enrich_events
+            from industry_intelligence.services.ai_suggestions import (
+                suggest_entities,
+                suggest_event_merges,
+            )
+
+            common = {
+                "since": args.since,
+                "domain": args.domain,
+                "limit": args.limit,
+                "dry_run": args.dry_run,
+            }
+            try:
+                if args.command == "ai-event-enrich":
+                    run = enrich_events(
+                        settings,
+                        factory,
+                        event_ids=args.event_id,
+                        locales=tuple(args.locale or LOCALES),
+                        artifact_types=tuple(
+                            args.type or ("event_summary", "event_why_it_matters")
+                        ),
+                        **common,
+                    )
+                elif args.command == "ai-entity-suggest":
+                    run = suggest_entities(settings, factory, event_ids=args.event_id, **common)
+                else:
+                    run = suggest_event_merges(settings, factory, **common)
+                result = asyncio.run(run)
+            except AIProviderNotConfigured as exc:
+                print(json.dumps({"error": "ai_provider_not_configured", "detail": str(exc)}))
+                raise SystemExit(1) from exc
+        elif args.command in {
+            "ai-suggestion-list",
+            "ai-suggestion-accept",
+            "ai-suggestion-reject",
+            "ai-artifact-reject",
+        }:
+            from industry_intelligence.services.ai_suggestions import (
+                SuggestionReviewRefused,
+                accept_suggestion,
+                list_suggestions,
+                reject_artifact,
+                reject_suggestion,
+            )
+
+            try:
+                with factory.begin() as session:
+                    if args.command == "ai-suggestion-list":
+                        status = None if args.status == "all" else args.status
+                        result = list_suggestions(session, status, args.type, args.limit)
+                    elif args.command == "ai-suggestion-accept":
+                        result = accept_suggestion(
+                            session, args.suggestion, args.reason, args.candidate, args.canonical
+                        )
+                    elif args.command == "ai-suggestion-reject":
+                        result = reject_suggestion(session, args.suggestion, args.reason)
+                    else:
+                        result = reject_artifact(session, args.artifact, args.reason)
+            except SuggestionReviewRefused as exc:
+                print(json.dumps({"error": "review_refused", "detail": str(exc)}))
+                raise SystemExit(1) from exc
         elif args.command in {"ingest-content", "ingest-content-all"}:
             from industry_intelligence.services.content_ingestion import (
                 ingest_all_content,

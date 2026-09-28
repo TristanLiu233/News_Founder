@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -14,7 +12,8 @@ from industry_intelligence.adapters.company_ranking import (
     CompanyRankingSnapshot,
 )
 from industry_intelligence.adapters.source import SourceAdapter, SourceItem
-from industry_intelligence.ai import AIGateway
+from industry_intelligence.ai import AIProvider
+from industry_intelligence.ai.providers.fixture import FixtureProvider
 from industry_intelligence.domain.enums import Domain
 
 
@@ -49,31 +48,6 @@ class FakeCompanyRankingAdapter:
         )
 
 
-@dataclass
-class StructuredAnswer:
-    label: str
-
-
-class FakeAIGateway:
-    async def generate(self, *, prompt: str, system_prompt: str | None = None) -> str:
-        return f"generated: {prompt}"
-
-    async def structured_generate(
-        self,
-        *,
-        prompt: str,
-        schema: type[StructuredAnswer],
-        system_prompt: str | None = None,
-    ) -> StructuredAnswer:
-        return schema(label=prompt)
-
-    async def embed(self, *, texts: Sequence[str]) -> list[list[float]]:
-        return [[float(index)] for index, _ in enumerate(texts)]
-
-    async def classify(self, *, text: str, labels: Sequence[str]) -> str:
-        return labels[0]
-
-
 def test_source_adapter_protocol_has_a_working_fake() -> None:
     adapter = FakeSourceAdapter()
 
@@ -88,17 +62,15 @@ def test_company_ranking_adapter_protocol_has_a_working_fake() -> None:
     assert asyncio.run(adapter.fetch()).entries[0].name == "Example Corp"
 
 
-def test_ai_gateway_protocol_has_a_working_fake() -> None:
-    gateway = FakeAIGateway()
+def test_ai_provider_protocol_has_a_working_fixture() -> None:
+    provider = FixtureProvider(lambda **request: {"label": request["schema_name"]})
 
-    assert isinstance(gateway, AIGateway)
-    assert asyncio.run(gateway.generate(prompt="hello")) == "generated: hello"
-    assert (
-        asyncio.run(gateway.structured_generate(prompt="finance", schema=StructuredAnswer)).label
-        == "finance"
+    assert isinstance(provider, AIProvider)
+    response = asyncio.run(
+        provider.generate_structured(system="s", user="u", schema={}, schema_name="finance")
     )
-    assert asyncio.run(gateway.embed(texts=["one", "two"])) == [[0.0], [1.0]]
-    assert asyncio.run(gateway.classify(text="x", labels=["keep", "drop"])) == "keep"
+    assert response.data == {"label": "finance"}
+    assert (response.provider, response.model) == ("fixture", "fixture-model")
 
 
 def test_source_item_rejects_invalid_rank_or_naive_timestamp() -> None:

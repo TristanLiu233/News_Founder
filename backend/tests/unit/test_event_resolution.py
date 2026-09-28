@@ -134,6 +134,43 @@ def test_event_type_keywords_are_conservative(headline, expected):
     assert expected in EVENT_TYPES
 
 
+@pytest.mark.parametrize(
+    ("headline", "expected"),
+    [
+        # A negation cue before the keyword in the same clause cancels it.
+        ("某公司：业务未有与某品牌开展联名、推广或其他形式的合作", "general"),
+        ("某公司：并未与对方达成合作", "general"),
+        ("某公司否认收购传闻", "general"),
+        ("某银行：目前没有收购计划", "general"),
+        ("Company denies merger talks", "general"),
+        ("Chipmaker says it will not pursue acquisition", "general"),
+        ("Studio doesn’t plan a partnership with the publisher", "general"),
+        # A negation in another clause does not cancel the keyword.
+        ("某公司：不会裁员，将与对方展开合作", "partnership"),
+        ("No layoffs planned; company acquires rival", "acquisition"),
+        # Ordinary words that contain a negating character are not negation cues.
+        ("某公司以未披露金额收购某工作室", "acquisition"),
+        ("某公司未来将与对方展开合作", "partnership"),
+        ("未成年人游戏防沉迷监管升级", "regulatory"),
+        ("某公司无人机新品正式发布", "product_launch"),
+        ("某公司不断推出新品", "product_launch"),
+        ("CEO who posted photos is no longer with the company", "leadership"),
+        # Decimal points are not clause breaks.
+        ("恩捷股份：拟11.5亿元收购湖北恩捷45%股权", "acquisition"),
+    ],
+)
+def test_event_type_ignores_negated_keywords(headline, expected):
+    assert classify_event_type(headline, "finance") == expected
+
+
+def test_negated_game_release_is_not_typed_in_gaming():
+    assert classify_event_type("开发商否认游戏延期", "gaming") == "general"
+    assert classify_event_type("Studio has not delayed the release date", "gaming") == "general"
+    assert classify_event_type("Studio delays sequel release date to 2027", "gaming") == (
+        "game_release"
+    )
+
+
 def test_game_release_is_only_assigned_in_gaming_domain():
     assert classify_event_type("Studio delays sequel release date to 2027", "gaming") == (
         "game_release"

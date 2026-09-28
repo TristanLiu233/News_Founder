@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import UUID
 
-RESOLVER_VERSION = "event-resolver/1"
+RESOLVER_VERSION = "event-resolver/2"
 
 # Calibrated on the live 2026-09-27 corpus (see AGENTS.md Phase 6 Checkpoint C/E).
 TIME_WINDOW = timedelta(hours=24)
@@ -105,6 +105,17 @@ _GAME_RELEASE = (
     r"\b(release date|releases?|released|launch(es|ed)?|delay(s|ed)?|early access)\b",
     r"上线|公测|发售|定档|延期",
 )
+# A keyword does not count when a negation cue precedes it inside the same clause ("未有…合作",
+# "denies merger talks"). Cues are whole negating words or phrases, never a bare character
+# that also forms ordinary words (未来, 未披露, 未成年, 无人机, 不断), so ambiguous wording keeps
+# its match.
+# Applied on normalized text, where "doesn't" reads "doesn t".
+_NEGATION = (
+    r"\b(not|never|nor|cannot|deny|denies|denied|rules? out|ruled out|[a-z]+n t)\b",
+    r"未有|未曾|未与|未就|并未|尚未|从未|没有|并无|暂无|无意|不会|不再|不涉及|不存在|不参与|"
+    r"否认|辟谣",
+)
+_CLAUSE_BREAK = re.compile(r"[,;!?，。；！？:：]|\.(?!\d)")
 
 
 def _nfkc(value):
@@ -198,14 +209,37 @@ def _any(patterns, text):
     return bool(re.search(english, text) or re.search(chinese, text))
 
 
-def classify_event_type(headline, domain=None):
-    """A type only when exactly one keyword family matches; otherwise ``general``."""
+def _clauses(headline):
+    """Normalized clauses of a headline, split at clause punctuation (not at decimal points)."""
 
-    text = normalize_title(headline)
-    matched = {name for name, patterns in _TYPE_RULES.items() if _any(patterns, text)}
-    if _any(_LEADERSHIP_ROLE, text) and _any(_LEADERSHIP_ACTION, text):
+    raw = _nfkc(headline).replace("’", "'")
+    return [clause for part in _CLAUSE_BREAK.split(raw) if (clause := normalize_title(part))]
+
+
+def _asserted(patterns, clauses):
+    """True when some keyword match has no negation cue before it in its clause."""
+
+    for clause in clauses:
+        for pattern in patterns:
+            for match in re.finditer(pattern, clause):
+                if not _any(_NEGATION, clause[: match.start()]):
+                    return True
+    return False
+
+
+def classify_event_type(headline, domain=None):
+    """A type only when exactly one keyword family is asserted; otherwise ``general``.
+
+    A keyword preceded by a negation cue in its own clause is not asserted, so a denial
+    ("…未有与某品牌开展合作", "denies merger talks") is not typed as the denied event.
+    """
+
+    clauses = _clauses(headline)
+    text = " ".join(clauses)
+    matched = {name for name, patterns in _TYPE_RULES.items() if _asserted(patterns, clauses)}
+    if _any(_LEADERSHIP_ROLE, text) and _asserted(_LEADERSHIP_ACTION, clauses):
         matched.add("leadership")
-    if str(domain) == "gaming" and _any(_GAME_RELEASE, text):
+    if str(domain) == "gaming" and _asserted(_GAME_RELEASE, clauses):
         matched.discard("product_launch")
         matched.add("game_release")
     return matched.pop() if len(matched) == 1 else "general"

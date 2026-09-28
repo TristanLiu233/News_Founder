@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - The Python virtualenv lives at the repository root (`.venv/`); backend commands run from `backend/` (e.g. `../.venv/bin/pytest`).
 - `Settings` (`backend/src/industry_intelligence/config.py`) always loads the repository-root `.env` by absolute path, so the CLI, Alembic, and pytest share one `DATABASE_URL` regardless of working directory. `migrations/env.py` overrides the URL in `alembic.ini` with that setting.
-- `.env` is gitignored and holds local-only values such as `SOURCE_CONTACT` (the deployment maintainer's own contact, sent only to Wikimedia hosts) and `SEC_CONTACT` (a separate contact, sent only to SEC hosts). `HTTPClient` enforces this per request host. Never print them or copy a real value into tracked files; `.env.example` keeps only placeholders.
+- `.env` is gitignored and holds local-only values such as `AI_API_KEY` (Phase 7), `SOURCE_CONTACT` (the deployment maintainer's own contact, sent only to Wikimedia hosts) and `SEC_CONTACT` (a separate contact, sent only to SEC hosts). `HTTPClient` enforces this per request host. Never print them or copy a real value into tracked files; `.env.example` keeps only placeholders.
 - PostgreSQL with pgvector comes from `docker compose up -d` (image `pgvector/pgvector:pg16`).
 
 ```bash
@@ -39,6 +39,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # backend/ — external company rankings (current published versions only)
 ../.venv/bin/python -m industry_intelligence.cli company-ranking-ingest cmc_tech_market_cap
 ../.venv/bin/python -m industry_intelligence.cli company-ranking-ingest-all
+
+# backend/ — Phase 7 AI (CLI only; bounded, cached; --dry-run sends no provider request)
+../.venv/bin/python -m industry_intelligence.cli ai-event-enrich --limit 10 --dry-run
+../.venv/bin/python -m industry_intelligence.cli ai-entity-suggest --event-id UUID
+../.venv/bin/python -m industry_intelligence.cli ai-merge-suggest --dry-run
+../.venv/bin/python -m industry_intelligence.cli ai-suggestion-list
+../.venv/bin/python -m industry_intelligence.cli ai-suggestion-accept UUID --reason "evidence"
 
 # frontend/ — dev server (reads NEXT_PUBLIC_API_BASE_URL from frontend/.env.local)
 npm run dev
@@ -72,11 +79,12 @@ Tests marked `integration` (`tests/integration/`) connect to the database from t
 
 **Events (Phase 6)** group persisted `ContentItem`s into canonical `Event`s; they are not Subjects and never feed Trending or Search. `services/event_resolution.py` holds the pure, unit-tested matching rules (normalization, identity evidence, conflicts, thresholds, `RESOLVER_VERSION`); `services/event_ingestion.build_events()` (caller's transaction, advisory lock `events`) assigns only content items without an `EventContentLink`, so re-runs are no-ops, and rebuilds derived `EventSubjectLink`/`EventCompanyLink` rows from existing content-subject and company-subject links; `services/event_merge.merge_events()` is the reviewed merge with `EventRedirect`; `services/events.py` is the read model for `api/events.py`. `event-build` is not run automatically after `ingest-content` (use `content-update-all` for the chained run), and `event-relink` must follow `content-relink` or `company-subject-link`. `services/event_rebuild.rebuild_events(start, end)` (CLI `event-rebuild`) deletes and rebuilds the Events that have a member in the window (new IDs; content untouched) and refuses windows containing reviewed merges. Changing matching rules does not re-group already processed content until `event-rebuild` is run for a window. Integration tests that call `build_events` must pass `content_ids=` and use timestamps far from the live corpus, or live content becomes a candidate. Tests that exercise a session factory (orchestration) bind a `sessionmaker(bind=connection, join_transaction_mode="create_savepoint")` to the rolled-back test connection (see `tests/integration/test_content_pipeline_postgres.py`).
 
-**Placeholders for future phases, not active code paths:** `ai/gateway.py` (`AIGateway` protocol; no phase uses LLMs yet).
+**AI enrichment (Phase 7)** is an enhancement layer over the deterministic data, never canonical truth. Services use only the `ai/provider.py` `AIProvider` protocol (`generate_structured`) and `generate_with_retry` (bounded; transient errors only); adapters live in the explicit `ai/providers` registry (`anthropic` via the official SDK, optional extra `backend[ai]`; `fixture` for tests). Settings `AI_PROVIDER`/`AI_MODEL`/`AI_API_KEY` come only from the root `.env` (placeholders count as unset; never print or commit a key); the Anthropic adapter passes key and base URL explicitly so the shell's own `ANTHROPIC_*` variables are ignored. Prompts are versioned `PromptSpec`s in `ai/prompts/` (change = new version). `services/ai_evidence.py` renders an Event's persisted reports under refs and validates output deterministically (schema, own-Event evidence refs, no advice/prediction, no multi-source claims for single-source Events, figures present in evidence, locale). `services/ai_enrichment.py` generates `ai_artifacts` (cache by `input_hash`, stale marking, one commit per task); `services/ai_insights.py` is the read model for `GET /api/v1/events/{id}/ai`, which never calls a provider; `services/ai_suggestions.py` creates `ai_suggestions` (entity candidates resolved by exact catalog lookup; cross-language merge candidates after a deterministic prefilter) and applies reviewed CLI actions through existing services (`reviewed` ContentSubjectLink / EventCompanyLink, `merge_events`). `content-relink`, `event-relink`, and `merge_events` preserve `reviewed` links; `event-rebuild` refuses windows with reviewed Company links. Page loads never trigger AI. Every real run costs money: preview with `--dry-run` and keep batches small (10–20 Events). Automated tests use `FixtureProvider` or an `httpx2.MockTransport` and never call a real provider.
 
 ## Frontend architecture (`frontend/`)
 
 - All pages are client components: `app/page.tsx` (Home), `app/today`, `app/trending`, `app/search`, `app/rankings`, `app/companies`, `app/company/[id]`, `app/events`, `app/event/[id]`, and `app/subject/[id]`. `components/shared.tsx` also holds `EventList` and `RelatedEvents` (used by Subject and Company Detail). Query state (`?domain=`, search params) is read from `window.location` in effects and written with `history.pushState`, which avoids `useSearchParams` Suspense requirements during `next build`.
 - `app/layout.tsx` wraps pages in `LocaleProvider` (`lib/i18n.tsx`; `useLocale()`, locale stored in `localStorage` under `locale`) and the shared `AppHeader`. Reusable UI lives in `components/shared.tsx`.
 - UI strings live in `common` (`lib/i18n.tsx`) for shared components and in a per-page dictionary (`copy` or `labels`) keyed by `en` and `zh-CN`. Any new string needs both entries.
+- `app/event/[id]` shows labelled AI Summary / Why It Matters cards from `GET /events/{id}/ai` (states available, not generated, failed, stale); an AI request failure never breaks the rest of the page.
 - `lib/api.ts` holds hand-written TypeScript types that mirror backend response shapes, plus fetch helpers built on `NEXT_PUBLIC_API_BASE_URL`. Update these types whenever an API response changes.

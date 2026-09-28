@@ -30,6 +30,7 @@ from industry_intelligence.db.models import (
     Source,
 )
 from industry_intelligence.services.company_resolution import resolve_company_redirect
+from industry_intelligence.services.content_linking import REVIEWED_STRATEGY
 from industry_intelligence.services.event_resolution import (
     RESOLVER_VERSION,
     TIME_WINDOW,
@@ -169,7 +170,20 @@ def refresh_event_entities(session, event_ids):
     if not event_ids:
         return {"subject_links": 0, "company_links": 0}
     session.execute(delete(EventSubjectLink).where(EventSubjectLink.event_id.in_(event_ids)))
-    session.execute(delete(EventCompanyLink).where(EventCompanyLink.event_id.in_(event_ids)))
+    # Reviewed Event ↔ Company links (explicit reviewed actions) are kept; derived ones rebuilt.
+    session.execute(
+        delete(EventCompanyLink).where(
+            EventCompanyLink.event_id.in_(event_ids),
+            EventCompanyLink.strategy != REVIEWED_STRATEGY,
+        )
+    )
+    reviewed_companies = set(
+        session.execute(
+            select(EventCompanyLink.event_id, EventCompanyLink.company_id).where(
+                EventCompanyLink.event_id.in_(event_ids)
+            )
+        ).all()
+    )
     members = defaultdict(list)
     for event_id, content_id in session.execute(
         select(EventContentLink.event_id, EventContentLink.content_item_id).where(
@@ -201,6 +215,8 @@ def refresh_event_entities(session, event_ids):
             )
             subject_links += 1
         for company_id, contents in by_company.items():
+            if (event_id, company_id) in reviewed_companies:
+                continue
             session.add(
                 EventCompanyLink(
                     event_id=event_id,

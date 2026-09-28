@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from industry_intelligence.db.session import get_db_session
+from industry_intelligence.services.ai_insights import event_ai
 from industry_intelligence.services.event_resolution import EVENT_TYPES
 from industry_intelligence.services.events import event_content, event_detail, list_events
 
@@ -56,3 +57,17 @@ def get_event_content(
     if content is None:
         raise HTTPException(404, "Event not found")
     return content
+
+
+@router.get("/events/{event_id}/ai")
+def get_event_ai(
+    event_id: UUID,
+    session: Annotated[Session, Depends(get_db_session)],
+    locale: str = Query("en", pattern="^(en|zh-CN)$"),
+):
+    """Persisted, validated AI insights only; this endpoint never calls an AI provider."""
+
+    insights = event_ai(session, event_id, locale)
+    if insights is None:
+        raise HTTPException(404, "Event not found")
+    return insights

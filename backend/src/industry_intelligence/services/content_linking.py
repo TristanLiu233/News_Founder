@@ -72,6 +72,9 @@ STRATEGY_CONFIDENCE = {
     "exact_alias": 0.96,
 }
 STRATEGY_ORDER = tuple(STRATEGY_CONFIDENCE)
+# Links written by an explicit reviewed action (Phase 7 ``ai-suggestion-accept``), never by the
+# rules above; ``content-relink`` keeps them and ``event-relink`` keeps reviewed Event links.
+REVIEWED_STRATEGY = "reviewed"
 
 CJK = re.compile(r"[㐀-鿿豈-﫿]")
 LATIN_OR_DIGIT = re.compile(r"[A-Za-z0-9]")

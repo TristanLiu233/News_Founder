@@ -1,6 +1,6 @@
 # Industry Intelligence & Ranking Platform
 
-The platform collects twelve public rankings plus ten chronological news/feed sources (four Finance, three Computer, three Gaming). It preserves source-native history, resolves ranked entries to auditable canonical subjects, and keeps chronological news separate from market rankings. Phase 4 adds an External Company Ranking Tracker that stores publisher company rankings as immutable snapshots with conservative company identity; Phase 5 adds sourced Company Profiles; Phase 6 groups existing news/feed items into canonical Events with deterministic, auditable rules; Phase 6.1 adds Computer and Gaming news, stricter deterministic content ↔ subject linking, a one-command content pipeline, and bounded Event rebuilds. The UI supports English and 简体中文; the selected locale is stored in browser `localStorage`.
+The platform collects twelve public rankings plus ten chronological news/feed sources (four Finance, three Computer, three Gaming). It preserves source-native history, resolves ranked entries to auditable canonical subjects, and keeps chronological news separate from market rankings. Phase 4 adds an External Company Ranking Tracker that stores publisher company rankings as immutable snapshots with conservative company identity; Phase 5 adds sourced Company Profiles; Phase 6 groups existing news/feed items into canonical Events with deterministic, auditable rules; Phase 6.1 adds Computer and Gaming news, stricter deterministic content ↔ subject linking, a one-command content pipeline, and bounded Event rebuilds; Phase 7 adds optional, source-grounded AI summaries and reviewable AI suggestions on top of that deterministic layer (AI never decides canonical data). The UI supports English and 简体中文; the selected locale is stored in browser `localStorage`.
 
 ## Sources
 
@@ -121,7 +121,7 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 | `/companies` | Company directory with company search (names, aliases, legal/localized names, identifiers), domain filter, and profile availability; separate from Subject search | 30 per page, previous/next |
 | `/company/{id}` | Company Detail: identity, sourced profile facts with provenance, external rankings and history, related news via linked Subjects, related Events, deterministic Subject links | Up to 10 related news, 5 related Events |
 | `/events` | Canonical Events grouped from existing news/feed items: domain and event-type filters, latest-report order, report and source counts, Subject/Company links (`?domain=&type=&subject_id=&company_id=&offset=`) | 20 per page, previous/next |
-| `/event/{id}` | Event Detail: first/last report time, event type, coverage by source and language, related Subjects and Companies, timeline of reports linking to the original articles (redirect-aware) | 10 reports per page, View More |
+| `/event/{id}` | Event Detail: first/last report time, event type, coverage by source and language, labelled AI Summary and Why It Matters (persisted, validated artifacts with source links; "not available" when none), related Subjects and Companies, timeline of reports linking to the original articles (redirect-aware) | 10 reports per page, View More |
 
 Header navigation is shared across pages. URLs are locale-independent; the locale stays in `localStorage`. Subject names in Trending and Search open the internal Subject Detail page; news titles and source titles open the original external URL in a new tab. Pages only read persisted data: no page load triggers ingestion, ranking, reindexing, embeddings, or LLM calls. The legacy `/?view=trending` URL redirects to `/trending`.
 
@@ -538,4 +538,107 @@ link; 0 Event ↔ Company links, because none of the linked Subjects has a Compa
 Gaming Events are all single-report: the adopted sources report no common story in the same
 language, and cross-language stories are intentionally not merged. A live full-window
 `event-rebuild --dry-run` reproduced all 335 clusters.
+
+## Phase 7 — AI Intelligence & Human-in-the-loop Enrichment
+
+AI is an enhancement layer, not the canonical truth layer. Content, Subjects, Companies,
+rankings, Events, identities, and links stay deterministic and auditable. AI may summarize,
+explain, and suggest; it never merges, links, renames, rewrites identities, changes rankings, or
+changes Event membership. A suggestion reaches canonical data only through an explicit reviewed
+CLI action that calls an existing service with all of its safeguards.
+
+```text
+persisted Event + ContentItems
+        ↓  (CLI batch only: ai-event-enrich / ai-entity-suggest / ai-merge-suggest)
+AIProvider (configured adapter) → structured JSON
+        ↓  schema + evidence validation (deterministic)
+ai_artifacts (valid | failed | stale | rejected) · ai_suggestions (pending | accepted | rejected)
+        ↓
+GET /api/v1/events/{id}/ai  →  Event Detail (labelled "AI-generated", with source links)
+```
+
+Page requests never call an AI provider: `/api/v1/events/{id}/ai` reads persisted, validated
+artifacts only, and the browser only talks to this project's API.
+
+### Provider configuration
+
+AI is optional. Without configuration every page works and shows "AI insight not available".
+
+```bash
+pip install -e "./backend[ai]"   # the Anthropic adapter (official SDK)
+# in the gitignored root .env — never commit a real key:
+AI_PROVIDER=anthropic
+AI_MODEL=<a model your provider account can use>
+AI_API_KEY=<your key>
+```
+
+`AI_PROVIDER` names an adapter in the explicit `ai/providers` registry; business services only
+use the `AIProvider` protocol, so another provider is a new adapter, not a service change. Keys
+are hidden from settings output and never stored in artifacts or logs; placeholders count as
+unset. The Anthropic adapter passes the key and base URL from project settings explicitly, so
+ambient `ANTHROPIC_*` shell variables are never used, and it does not enable server-side model
+fallbacks, so the recorded model is the one that served the request. Timeouts, HTTP 429, and 5xx
+are retried at most `AI_MAX_RETRIES` times (backoff, `retry-after` honoured, capped at 60 s);
+other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a run.
+
+### Artifacts, source grounding, and validation
+
+- The provider sees only the Event's persisted reports under short refs (`C1`, `C2`, …): source,
+  language, publication time, title, and an excerpt of at most 280 characters. No browsing, no
+  outside knowledge, no other Events.
+- Prompts are versioned modules (`ai/prompts/`: `event_summary_v1`, `event_why_it_matters_v1`,
+  `event_entity_candidates_v1`, `event_pair_same_event_v1`); a prompt change is a new version.
+- Output must match a closed JSON schema, and deterministic guards must pass: every point cites
+  refs of this Event only; no investment advice, price targets, ratings, or market predictions; a
+  single-source Event is never described as multiple reports; every figure appears in the
+  evidence; the text is in the requested locale. Any failure stores a `failed` artifact (error
+  code only) and nothing is displayed.
+- Each artifact records provider, served model, prompt version, locale, the evidence content IDs,
+  and an `input_hash` over prompt version, locale, and the exact evidence. A matching valid
+  artifact is a replay (no request, no cost). When an Event's reports change, the API reports the
+  old artifact as `stale` immediately and the next batch marks it and generates a new version.
+- AI Summary: 1–4 factual points in English or Simplified Chinese (one artifact per locale; raw
+  titles and names stay in their original language). Why It Matters: 0–3 descriptive
+  business/technology/industry/product/regulatory points, or an explicit "not enough context"
+  answer — never predictions or advice.
+
+```bash
+cd backend
+# Preview: candidate Events, cached, stale, and estimated requests — sends nothing, writes nothing
+python -m industry_intelligence.cli ai-event-enrich --limit 10 --dry-run
+# Bounded run (default 10 Events, max 100); repeat --event-id / --locale / --type to narrow
+python -m industry_intelligence.cli ai-event-enrich --event-id <uuid> --locale zh-CN
+# Hide an inaccurate artifact after review
+python -m industry_intelligence.cli ai-artifact-reject <artifact-uuid> --reason "evidence says otherwise"
+```
+
+### Suggestions and review
+
+- `ai-entity-suggest` asks which entities the reports name. Each name must literally appear in
+  the cited reports and is then resolved by deterministic exact lookup (Subject title/alias in the
+  Event's domain, Company name/alias, or exact ticker). The model never chooses database IDs.
+  Results are Subject or Company candidates (ambiguous ones list their options) or
+  `new_entity_candidate` for names not in the catalog, which can only be rejected.
+- `ai-merge-suggest` first prefilters cross-language Event pairs deterministically (same domain,
+  different report languages, within 72 hours, compatible types, no conflicting entity links, and
+  a shared entity link or a shared Latin-script name that few Events mention), then asks the
+  provider whether each pair is the same occurrence; only "yes" becomes a pending suggestion.
+- Review is CLI-only (there is no write API): `ai-suggestion-list`, `ai-suggestion-accept ID
+  --reason … [--candidate ID] [--canonical ID]`, `ai-suggestion-reject ID --reason …`. Accepting a
+  Subject candidate writes `reviewed` content ↔ subject links on the cited reports; a Company
+  candidate writes a `reviewed` Event ↔ Company link; a merge candidate calls the Phase 6 reviewed
+  merge, whose safeguards still refuse unsafe merges. `content-relink` and `event-relink` keep
+  reviewed links, and `event-rebuild` refuses windows with reviewed Company links.
+
+### Cost and limitations
+
+Runs are bounded and incremental: test on 10–20 representative Events first, preview with
+`--dry-run`, and rerun freely (unchanged evidence is a free replay). AI output can still be
+wrong even after validation — the UI labels it "AI-generated", says it may contain errors, and
+links every point to its reports, and the full timeline stays on the page. AI output never feeds
+Trending, Search, Rankings, company profiles, or scores.
+
+Status on 2026-09-28: implemented and tested with a fixture provider (no automated test calls a
+paid API); no AI provider is configured in this environment, so live AI output has not been
+generated or audited (live `ai_artifacts` = 0, `ai_suggestions` = 0).
 

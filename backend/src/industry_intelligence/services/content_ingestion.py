@@ -24,6 +24,7 @@ from industry_intelligence.db.models.search import SubjectRedirect
 from industry_intelligence.infrastructure.http import HTTPClient
 from industry_intelligence.services.content_linking import (
     LINKER_VERSION,
+    REVIEWED_STRATEGY,
     STRATEGY_CONFIDENCE,
     build_catalog,
     match_content,
@@ -268,13 +269,22 @@ def relink_all_content(session, dry_run=False, content_ids=None):
     for item in items:
         for subject_id, (strategy, evidence) in item_matches(item, catalog(item.domain)).items():
             desired[(item.id, subject_id)] = (strategy, evidence, item)
+    stored = session.scalars(
+        select(ContentSubjectLink).where(
+            ContentSubjectLink.content_item_id.in_([item.id for item in items])
+        )
+    ).all()
+    # Reviewed links are human decisions: never removed, replaced, or re-added by the rules.
+    reviewed = {
+        (link.content_item_id, link.subject_id)
+        for link in stored
+        if link.strategy == REVIEWED_STRATEGY
+    }
+    desired = {key: value for key, value in desired.items() if key not in reviewed}
     existing = {
         (link.content_item_id, link.subject_id): link
-        for link in session.scalars(
-            select(ContentSubjectLink).where(
-                ContentSubjectLink.content_item_id.in_([item.id for item in items])
-            )
-        )
+        for link in stored
+        if link.strategy != REVIEWED_STRATEGY
     }
     added = [key for key in desired if key not in existing]
     removed = [key for key in existing if key not in desired]
@@ -295,6 +305,7 @@ def relink_all_content(session, dry_run=False, content_ids=None):
         "removed": len(removed),
         "strategy_changed": len(changed),
         "unchanged": len(desired) - len(added) - len(changed),
+        "reviewed_kept": len(reviewed),
         "by_domain": {domain: dict(sorted(c.items())) for domain, c in sorted(by_domain.items())},
     }
     if dry_run:

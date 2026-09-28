@@ -1,5 +1,6 @@
 """ORM models available to metadata and application code."""
 
+from industry_intelligence.db.models.ai import AIArtifact, AISuggestion
 from industry_intelligence.db.models.company import Company, CompanyAlias, CompanyIdentity
 from industry_intelligence.db.models.company_profile import (
     CompanyProfile,
@@ -23,6 +24,8 @@ from industry_intelligence.db.models.source import Source
 from industry_intelligence.db.models.subject import Subject
 
 __all__ = [
+    "AIArtifact",
+    "AISuggestion",
     "Company",
     "CompanyAlias",
     "CompanyIdentity",

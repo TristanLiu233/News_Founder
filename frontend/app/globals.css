@@ -213,3 +213,15 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
   .event-timeline li { grid-template-columns: minmax(0, 1fr); gap: .25rem; }
   .event-filters { padding: 1rem; }
 }
+
+/* Phase 7 AI insights: always labelled, visually distinct from source facts. */
+.ai-insights { margin-top: 1.2rem; }
+.ai-note { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.ai-badge { background: #efe9fb; color: #5b3d99; }
+.ai-card { border-style: dashed; background: #fcfbff; }
+.ai-card h2 { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.ai-points { margin: .4rem 0 0; padding-left: 1.1rem; }
+.ai-points li { margin: .45rem 0; line-height: 1.5; overflow-wrap: anywhere; }
+.ai-evidence { display: inline-flex; flex-wrap: wrap; gap: .1rem .5rem; margin-left: .2rem; font-size: .8rem; }
+.ai-evidence a { color: #087f5b; text-decoration: none; }
+.ai-evidence a:hover { text-decoration: underline; }

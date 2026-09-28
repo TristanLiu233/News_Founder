@@ -460,3 +460,33 @@ export function fetchEventContent(
 ): Promise<EventContentPage> {
   return getJson(`/api/v1/events/${encodeURIComponent(id)}/content`, options, signal);
 }
+
+/**
+ * Phase 7 AI insights: persisted, validated AI output only (the endpoint never calls a provider).
+ * AI text is an interpretation of the listed reports, never a canonical fact.
+ */
+export type AIInsightType = "event_summary" | "event_why_it_matters";
+export type AIInsightState = "available" | "not_generated" | "failed" | "stale";
+export interface AIEvidence {
+  content_id: string; position: number; source: string; title: string; url: string;
+  language: string; published_at: string | null;
+}
+export interface AIInsightPoint {
+  text: string;
+  context: "business" | "technology" | "industry" | "product" | "regulatory" | null;
+  evidence: AIEvidence[];
+}
+export interface AIInsightArtifact {
+  id: string; artifact_type: AIInsightType; locale: string; provider: string; model: string;
+  prompt_version: string; generated_at: string; insufficient_evidence: boolean; points: AIInsightPoint[];
+}
+export interface AIInsight { state: AIInsightState; artifact: AIInsightArtifact | null; error_code?: string | null; }
+export interface EventAI {
+  event_id: string; requested_id: string; redirected: boolean; locale: "en" | "zh-CN";
+  ai_generated: true; content_count: number; source_count: number; single_source: boolean;
+  insights: Record<AIInsightType, AIInsight>;
+}
+
+export function fetchEventAi(id: string, locale: "en" | "zh-CN", signal?: AbortSignal): Promise<EventAI> {
+  return getJson(`/api/v1/events/${encodeURIComponent(id)}/ai`, {locale}, signal);
+}
