@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Scheduler-1: daily intelligence update at 08:00 system local time (Australia/Sydney).
+     Install by replacing __PROJECT_ROOT__ and __LOG_DIR__ with absolute paths (see README). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.industry-intelligence.daily-update</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PROJECT_ROOT__/.venv/bin/python</string>
+    <string>__PROJECT_ROOT__/ops/scheduler/daily_update.py</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/daily-update.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/daily-update.log</string>
+</dict>
+</plist>
