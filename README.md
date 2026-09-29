@@ -764,3 +764,47 @@ python -m industry_intelligence.cli intelligence-update --run-id 20260929T000000
   requested unattended; `--source KEY` or `company-ranking-ingest KEY` remain explicit choices.
 - Errors are reported as source, exception type, category, and HTTP status only; no messages,
   headers, URLs with parameters, or configuration values are printed.
+
+## Operations-2 — Source health, update lock, and schedule-ready command
+
+Status (2026-09-30): **complete.** `intelligence-update` is now safe to invoke from an external
+scheduler: one run at a time (PostgreSQL advisory lock), every run and source attempt recorded,
+and a read-only `source-health` report. No scheduler is configured. Migration `20260930_12` adds
+two operational tables (`update_runs`, `source_attempts`); no existing table changed.
+
+```bash
+# The one command an external scheduler will invoke (AI stays off until the owner decides)
+python -m industry_intelligence.cli intelligence-update --skip-ai
+
+# Health of every automatic source, from recorded attempts (read-only, no network request)
+python -m industry_intelligence.cli source-health
+python -m industry_intelligence.cli source-health --json
+```
+
+- **Lock.** A real run takes `pg_try_advisory_lock` (a two-int4 key, which PostgreSQL keeps apart
+  from the services' one-bigint transaction locks) on its own unpooled connection before any
+  write and holds it for the whole run. If another run holds it, the command exits `4`
+  (`ALREADY_RUNNING`) at once with no source request, provider request, or write; it never
+  queues. The lock is released explicitly at the end and by PostgreSQL when the process or its
+  connection dies, so it cannot stay stuck. `--plan` never takes the lock; it only reports
+  whether it is held at that moment.
+- **Run history.** Under the lock the run first marks any `update_runs` row still `running` as
+  `interrupted` (the held lock proves its process is gone; elapsed time alone never does), then
+  records itself and, at the end, its status, exit code, and a stage summary (no logs or
+  tracebacks). Runs are not limited per day, and a retry with the same `--run-id` is a new row.
+- **Source attempts.** Every attempted source gets one append-only row: outcome `success`,
+  `replayed`, `unchanged` (the first three are successful; zero new items is never a failure),
+  or `failed` with the failing phase (`transport`, `parse` — e.g. an HTTP 200 whose body cannot
+  be read — `persist`, or `other`), category, exception type, HTTP status, a bounded summary
+  built from those fields only, and fetched/stored/replayed/invalid counts.
+- **Health** is derived on read from the current automatic registry left-joined with attempts:
+  `never_run` (no attempt), `failing` (latest attempt failed), `degraded` (latest attempt
+  succeeded but rejected malformed rows), `healthy`. Consecutive and recent failures and the
+  last error are reported separately, so a recovered source reads `healthy` with its failure
+  history still visible.
+- **Statuses and exit codes:** `success` 0, `failed` 1 (a fatal orchestration failure), `degraded`
+  3 (the orchestration completed but one or more isolated operations failed: some sources, the
+  optional AI stage, or recording the run history), `already_running` 4, `--plan` 0 (1 when its
+  precheck fails). Exit code 2 remains argparse's usage error.
+- **Never automatic:** migrations, repairs (`--apply`), reviewed merges, `event-rebuild`, company
+  profile ingestion, embeddings, and cross-language AI.

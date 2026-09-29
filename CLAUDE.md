@@ -28,12 +28,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ../.venv/bin/python -m industry_intelligence.cli event-build --dry-run
 ../.venv/bin/python -m industry_intelligence.cli event-build
 
-# backend/ — the daily run (Operations-1): precheck → rankings → composite → company rankings →
-# content → links → events → AI (optional) → postcheck; --plan is read-only (no network, no writes)
+# backend/ — the daily run (Operations-1/2): update lock → precheck → rankings → composite →
+# company rankings → content → links → events → AI (optional) → postcheck; --plan is read-only
+# (no network, no writes, never takes the lock). The scheduler-ready command is --skip-ai.
 ../.venv/bin/python -m industry_intelligence.cli intelligence-update --plan
 ../.venv/bin/python -m industry_intelligence.cli intelligence-update --skip-ai
-# exit 0 success, 3 degraded, 1 failed; tests writing every stage need a *_test DATABASE_URL:
-DATABASE_URL=postgresql+psycopg://…/industry_intelligence_test ../.venv/bin/pytest tests/integration/test_intelligence_update_postgres.py
+# exit 0 success, 3 degraded, 1 failed, 4 already running; tests writing every stage (and the
+# migration round trip) need a *_test DATABASE_URL:
+DATABASE_URL=postgresql+psycopg://…/industry_intelligence_test ../.venv/bin/pytest tests/integration/test_intelligence_update_postgres.py tests/integration/test_operations_postgres.py
+
+# backend/ — source health from recorded attempts (read-only, no network request)
+../.venv/bin/python -m industry_intelligence.cli source-health --json
 
 # backend/ — one bounded content run: ingest all content sources → link new items → event-build
 ../.venv/bin/python -m industry_intelligence.cli content-update-all
@@ -81,6 +86,8 @@ Tests marked `integration` (`tests/integration/`) connect to the database from t
 **Content pipeline** (`services/content_ingestion.py`): `persist_content()` deduplicates by `(source_id, identity_key)` (external ID, else URL) and treats an already stored normalized URL of the same source as a replay, then links the new items inside a SAVEPOINT (a linking failure is reported as `link_error` and never rolls back content). Linking rules are pure functions in `services/content_linking.py` (`content-linker/2`: `same_article` → `exchange_code` → `cashtag` → unique `exact_name`/`exact_alias` with eligibility rules; see its docstring). `relink_all_content()` reconciles stored links with recomputed ones (adds, removes stale, reports counts; `dry_run` lists them) and refreshes affected search documents; run it after changing matching rules or after ranking ingestion adds Subjects, then run `event-relink`. `services/content_pipeline.update_all_content()` (CLI `content-update-all`) chains per-source ingestion and one `build_events` run with per-stage failure isolation. Computer/Gaming news adapters live in `adapters/source/news_feeds.py` (publisher RSS, excerpts ≤ 280 characters; full bodies are never stored).
 
 **Daily update (Operations-1)** (`services/intelligence_update.py`, CLI `intelligence-update`) only orchestrates existing services, each stage in its own transaction (sources one transaction each): read-only precheck (DB, Alembic head, `data-quality-audit` errors block) → ranking `ingest` (batch key from the run ID, so `--run-id` retries replay) → `rank_domain` → `ingest_company_ranking` for rankings with `daily_update` (Wikipedia is manual-only) → `ingest_content` → `relink_all_content` + `relink_all_companies` → incremental `build_events` + `relink_all_events` (never rebuilds or retires Events) → `enrich_events(skip_settled=True)` (skips reviewer rejections and non-transient failures) → read-only postcheck. Source failures are isolated per source; a failed `links`/`events` stage skips its dependants. `StageResult`/`UpdateResult` carry counts and safe error categories; `render_text` prints the operator summary. Its PostgreSQL tests skip unless the database name ends in `_test`.
+
+**Operations-2** (`services/update_operations.py`, `services/source_health.py`, `services/ingestion_phase.py`, `db/models/operations.py`, migration `20260930_12`): the CLI's real run is `execute_update`, which wraps the lock-free `run_update`. It takes `UpdateLock` (`pg_try_advisory_lock` on the two-int4 `UPDATE_LOCK_KEY`, on a dedicated `NullPool` autocommit connection held for the whole run; never an ordinary stage session) and returns `already_running` (exit 4) with no request or write when it is held. Under the lock `RunRecorder` marks stale `running` `update_runs` rows `interrupted`, records the run, one append-only `source_attempts` row per attempted source (via the `record` callback of `_each_source`), and the final status; recording failures only degrade the run. The three ingestion services wrap fetch and persist in `ingestion_phase(...)`, which only tags the re-raised exception, so `error_detail` reports `transport`/`parse`/`persist`/`other`. `source-health` derives health (`never_run`, `failing`, `degraded` = latest attempt rejected rows, `healthy`) on read from the current automatic registry (`select_sources()`) left-joined with attempts; there is no current-health table. `plan_update` never takes the lock and only reports `lock_state`.
 
 **Search** (`services/search_index.py`, `services/search.py`): `refresh_subject()` rebuilds one subject's `SearchDocument` (aliases plus bounded recent titles; the FTS `tsvector` is a generated column). `search()` gathers lexical candidates, plus pgvector candidates when an `EmbeddingProvider` (`ai/embeddings.py`) is configured, and combines them with `fuse()`. This is a separate RRF context from Trending.
 
