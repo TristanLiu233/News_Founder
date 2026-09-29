@@ -82,6 +82,14 @@ python -m industry_intelligence.cli ingest-all
 python -m industry_intelligence.cli rank-all
 ```
 
+The bounded DQ-1 Subject identity repair is dry-run-first. Inspect its complete plan before a
+separately approved apply; the live development database has not yet been repaired:
+
+```bash
+python -m industry_intelligence.cli subject-identity-repair
+python -m industry_intelligence.cli subject-identity-repair --apply  # approval required
+```
+
 Single-source and single-domain commands include:
 
 ```bash

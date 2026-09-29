@@ -58,6 +58,9 @@ def main():
     rank.add_argument("domain", choices=list(Domain))
     sub.add_parser("rank-all")
     sub.add_parser("backfill-subjects")
+    identity_repair = sub.add_parser("subject-identity-repair")
+    # Safe by default: writes require the explicit --apply acknowledgement.
+    identity_repair.add_argument("--apply", action="store_true")
     reindex_parser = sub.add_parser("search-reindex")
     reindex_parser.add_argument("--subject-id", type=UUID)
     sub.add_parser("search-embed")
@@ -150,6 +153,21 @@ def main():
         elif args.command == "backfill-subjects":
             with factory.begin() as session:
                 result = backfill_subject_identities(session)
+        elif args.command == "subject-identity-repair":
+            from sqlalchemy import text
+
+            from industry_intelligence.services.subject_identity_repair import (
+                repair_subject_identities,
+            )
+
+            session = factory()
+            try:
+                if not args.apply:
+                    session.execute(text("SET TRANSACTION READ ONLY"))
+                result = repair_subject_identities(session, dry_run=not args.apply)
+                session.commit() if args.apply else session.rollback()
+            finally:
+                session.close()
         elif args.command in {"rank", "rank-all"}:
             domains = [Domain(args.domain)] if args.command == "rank" else list(Domain)
             result = []

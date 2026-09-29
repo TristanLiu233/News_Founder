@@ -8,7 +8,12 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select, text, update
 
-from industry_intelligence.db.models import ContentSubjectLink, RankObservation, Subject
+from industry_intelligence.db.models import (
+    ContentSubjectLink,
+    EventSubjectLink,
+    RankObservation,
+    Subject,
+)
 from industry_intelligence.db.models.canonical import SubjectAlias, SubjectExternalIdentity
 from industry_intelligence.db.models.search import SubjectRedirect
 
@@ -300,6 +305,27 @@ def merge_subjects(session, canonical_id, duplicate_id):
             )
         )
         if exists:
+            session.delete(link)
+        else:
+            link.subject_id = canonical_id
+    for link in session.scalars(
+        select(EventSubjectLink).where(EventSubjectLink.subject_id == duplicate_id)
+    ).all():
+        existing = session.scalar(
+            select(EventSubjectLink).where(
+                EventSubjectLink.subject_id == canonical_id,
+                EventSubjectLink.event_id == link.event_id,
+            )
+        )
+        if existing:
+            content_ids = sorted(
+                {
+                    *(existing.evidence or {}).get("content_item_ids", []),
+                    *(link.evidence or {}).get("content_item_ids", []),
+                }
+            )
+            existing.content_count = len(content_ids)
+            existing.evidence = {**(existing.evidence or {}), "content_item_ids": content_ids}
             session.delete(link)
         else:
             link.subject_id = canonical_id
