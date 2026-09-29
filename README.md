@@ -687,3 +687,59 @@ Status on 2026-09-28 (Phase 7 closure): implemented and tested with a fixture pr
 automated test calls a paid API). Phase 7.1 then configured Anthropic locally and live-verified
 and manually audited primary-locale output for 17 Events and a 6-Event bilingual subset; see
 `AGENTS.md` (Phase 7.1 checkpoints) for the current state.
+
+## Operations-1 — Daily intelligence update
+
+Status (2026-09-29): **implementation ready; bounded live smoke pending owner approval.** The
+command is implemented and tested on the isolated test database; it has not yet been run against
+the development database except with `--plan` (read-only).
+
+`intelligence-update` is one explicit CLI process that runs the existing services in dependency
+order. It adds no queue, scheduler, or new intelligence logic, and it never runs migrations,
+repairs, reviewed merges, `event-rebuild`, company profile ingestion, or embeddings.
+
+```bash
+# What a run would do: read-only precheck, sources, pending links/Events, AI plan.
+# No network request, no provider call, no database write.
+python -m industry_intelligence.cli intelligence-update --plan
+
+# The daily run (text summary; --json for machine output)
+python -m industry_intelligence.cli intelligence-update
+
+# Bounded controls
+python -m industry_intelligence.cli intelligence-update --skip-ai
+python -m industry_intelligence.cli intelligence-update --source gematsu --skip-ai
+python -m industry_intelligence.cli intelligence-update --ai-limit 5
+# Retry a stopped run: ranking sources already stored under this run ID replay without a request
+python -m industry_intelligence.cli intelligence-update --run-id 20260929T000000Z-abcd1234
+```
+
+| Stage | Existing service | Transaction | On failure |
+| --- | --- | --- | --- |
+| `precheck` | DB reachable, Alembic current = head, `data-quality-audit` | read-only | run FAILED, nothing written |
+| `rankings` | `ingest` per ranking source (batch key from the run ID) | one per source | source recorded, others continue |
+| `composite` | `rank_domain` per domain | one | run FAILED (previous run stays exposed) |
+| `company_rankings` | `ingest_company_ranking` per ranking with `daily_update` | one per ranking | ranking recorded, others continue |
+| `content` | `ingest_content` per content source (links new items) | one per source | source recorded, others continue |
+| `links` | `relink_all_content` + `relink_all_companies` | one | run FAILED; `events` and `ai` skipped |
+| `events` | incremental `build_events` + `relink_all_events` | one | run FAILED; `ai` skipped; content kept |
+| `ai` (optional) | `enrich_events` for the 10 most recent Events | one per artifact | run DEGRADED; canonical data kept |
+| `postcheck` | `data-quality-audit` | read-only | error → run FAILED (never auto-repaired) |
+
+- **Statuses and exit codes:** `SUCCESS` (0); `DEGRADED` (3) when some sources or the AI stage
+  failed but every required stage succeeded; `FAILED` (1) when the precheck, postcheck, a
+  required stage, or every source of a group failed. Exit code 2 remains argparse's usage error.
+- **Idempotency:** content deduplicates by identity/URL, company snapshots by daily key, composite
+  runs by input hash, Events are built only for unassigned content, links are reconciled, and
+  valid AI artifacts replay. A rerun with the same `--run-id` replays the ranking sources; a new
+  run ID records one new, correctly timed ranking snapshot (append-only by design).
+- **Event permalinks:** the daily run only creates or joins Events; it never rebuilds, retires,
+  or merges, and it fails the `events` stage if a retired ID would appear.
+- **AI:** skipped when no provider is configured or with `--skip-ai`; generates only missing,
+  stale, or transiently failed (timeout, rate limit, server, authentication) artifacts; a reviewer
+  rejection or a validation/refusal/malformed failure is never regenerated unattended (use
+  `ai-event-enrich` explicitly). Prompts, validators, and review policy are unchanged.
+- **Company rankings:** the two Wikipedia rankings (`daily_update=False`, HTTP 403) are never
+  requested unattended; `--source KEY` or `company-ranking-ingest KEY` remain explicit choices.
+- Errors are reported as source, exception type, category, and HTTP status only; no messages,
+  headers, URLs with parameters, or configuration values are printed.

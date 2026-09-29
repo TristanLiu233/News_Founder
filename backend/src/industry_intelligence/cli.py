@@ -54,6 +54,17 @@ def main():
     # ingest (per source) → link new items → event-build; repeat --source to narrow the run.
     update.add_argument("--source", action="append", choices=CONTENT_SOURCES)
     update.add_argument("--skip-events", action="store_true")
+    intelligence = sub.add_parser("intelligence-update")
+    # The daily run: precheck → rankings → composite → company rankings → content → links →
+    # events → AI (optional) → postcheck. Exit 0 success, 3 degraded, 1 failed.
+    intelligence.add_argument("--plan", action="store_true")
+    intelligence.add_argument(
+        "--source", action="append", choices=[*SOURCES, *COMPANY_RANKINGS, *CONTENT_SOURCES]
+    )
+    intelligence.add_argument("--skip-ai", action="store_true")
+    intelligence.add_argument("--ai-limit", type=int, default=10)
+    intelligence.add_argument("--run-id")
+    intelligence.add_argument("--json", action="store_true")
     rank = sub.add_parser("rank")
     rank.add_argument("domain", choices=list(Domain))
     sub.add_parser("rank-all")
@@ -209,6 +220,24 @@ def main():
             else:
                 print(render_text(report))
             raise SystemExit(0 if report["summary"]["result"]["passed"] else 1)
+        elif args.command == "intelligence-update":
+            from industry_intelligence.services.intelligence_update import (
+                plan_update,
+                render_text,
+                run_update,
+            )
+
+            options = {"sources": args.source, "skip_ai": args.skip_ai, "ai_limit": args.ai_limit}
+            if args.plan:
+                plan = asyncio.run(plan_update(settings, factory, **options))
+                print(json.dumps(plan, indent=2, ensure_ascii=False, default=str))
+                raise SystemExit(1 if plan["precheck"]["status"] == "failed" else 0)
+            update = asyncio.run(run_update(settings, factory, run_id=args.run_id, **options))
+            if args.json:
+                print(json.dumps(update.to_dict(), indent=2, ensure_ascii=False, default=str))
+            else:
+                print(render_text(update))
+            raise SystemExit(update.exit_code)
         elif args.command in {"rank", "rank-all"}:
             domains = [Domain(args.domain)] if args.command == "rank" else list(Domain)
             result = []

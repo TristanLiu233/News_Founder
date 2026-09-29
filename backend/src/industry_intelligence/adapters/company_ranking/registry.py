@@ -35,6 +35,9 @@ class CompanyRankingDefinition:
     methodology: str | None = None
     # The publisher's API policy requires a contact in the User-Agent (SOURCE_CONTACT).
     requires_contact: bool = False
+    # Fetched by the unattended ``intelligence-update`` run; False keeps a ranking manual-only
+    # (``company-ranking-ingest KEY`` or an explicit ``intelligence-update --source KEY``).
+    daily_update: bool = True
     params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -75,6 +78,9 @@ def _wikipedia(key, domain, name, page, metric_type, metric_label, params):
         # Wikipedia tables are stored in full (50 and 100 rows at audit time).
         entry_limit=200,
         requires_contact=True,
+        # Wikimedia answers HTTP 403 to this client (not live verified); enabling it is an
+        # owner decision, so unattended runs never request it.
+        daily_update=False,
         params={"page": page, **params},
     )
 

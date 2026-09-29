@@ -28,6 +28,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ../.venv/bin/python -m industry_intelligence.cli event-build --dry-run
 ../.venv/bin/python -m industry_intelligence.cli event-build
 
+# backend/ — the daily run (Operations-1): precheck → rankings → composite → company rankings →
+# content → links → events → AI (optional) → postcheck; --plan is read-only (no network, no writes)
+../.venv/bin/python -m industry_intelligence.cli intelligence-update --plan
+../.venv/bin/python -m industry_intelligence.cli intelligence-update --skip-ai
+# exit 0 success, 3 degraded, 1 failed; tests writing every stage need a *_test DATABASE_URL:
+DATABASE_URL=postgresql+psycopg://…/industry_intelligence_test ../.venv/bin/pytest tests/integration/test_intelligence_update_postgres.py
+
 # backend/ — one bounded content run: ingest all content sources → link new items → event-build
 ../.venv/bin/python -m industry_intelligence.cli content-update-all
 # backend/ — recompute content ↔ subject links (preview first), then derived Event links
@@ -72,6 +79,8 @@ Tests marked `integration` (`tests/integration/`) connect to the database from t
 **Composite ranking** (`services/ranking.py`): `rank_domain()` computes the freshness-weighted RRF from each rank list's current snapshot and stores an immutable `CompositeRankingRun` keyed by input/config hashes; identical inputs return the existing run. `trending()` reads the latest successful run and attaches related-news previews from `services/news.py`.
 
 **Content pipeline** (`services/content_ingestion.py`): `persist_content()` deduplicates by `(source_id, identity_key)` (external ID, else URL) and treats an already stored normalized URL of the same source as a replay, then links the new items inside a SAVEPOINT (a linking failure is reported as `link_error` and never rolls back content). Linking rules are pure functions in `services/content_linking.py` (`content-linker/2`: `same_article` → `exchange_code` → `cashtag` → unique `exact_name`/`exact_alias` with eligibility rules; see its docstring). `relink_all_content()` reconciles stored links with recomputed ones (adds, removes stale, reports counts; `dry_run` lists them) and refreshes affected search documents; run it after changing matching rules or after ranking ingestion adds Subjects, then run `event-relink`. `services/content_pipeline.update_all_content()` (CLI `content-update-all`) chains per-source ingestion and one `build_events` run with per-stage failure isolation. Computer/Gaming news adapters live in `adapters/source/news_feeds.py` (publisher RSS, excerpts ≤ 280 characters; full bodies are never stored).
+
+**Daily update (Operations-1)** (`services/intelligence_update.py`, CLI `intelligence-update`) only orchestrates existing services, each stage in its own transaction (sources one transaction each): read-only precheck (DB, Alembic head, `data-quality-audit` errors block) → ranking `ingest` (batch key from the run ID, so `--run-id` retries replay) → `rank_domain` → `ingest_company_ranking` for rankings with `daily_update` (Wikipedia is manual-only) → `ingest_content` → `relink_all_content` + `relink_all_companies` → incremental `build_events` + `relink_all_events` (never rebuilds or retires Events) → `enrich_events(skip_settled=True)` (skips reviewer rejections and non-transient failures) → read-only postcheck. Source failures are isolated per source; a failed `links`/`events` stage skips its dependants. `StageResult`/`UpdateResult` carry counts and safe error categories; `render_text` prints the operator summary. Its PostgreSQL tests skip unless the database name ends in `_test`.
 
 **Search** (`services/search_index.py`, `services/search.py`): `refresh_subject()` rebuilds one subject's `SearchDocument` (aliases plus bounded recent titles; the FTS `tsvector` is a generated column). `search()` gathers lexical candidates, plus pgvector candidates when an `EmbeddingProvider` (`ai/embeddings.py`) is configured, and combines them with `fuse()`. This is a separate RRF context from Trending.
 

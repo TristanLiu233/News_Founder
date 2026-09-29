@@ -38,6 +38,12 @@ ENTITY_EVENT = "event"
 LOCALES = ("en", "zh-CN")
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 100
+# Failures that a later run may retry without a reviewer: the provider never produced a checked
+# answer (network, rate limit, server, authentication, configuration). A validation failure,
+# refusal, or malformed answer was a real (paid) answer and is not retried unattended.
+TRANSIENT_ERRORS = frozenset(
+    {"timeout", "rate_limited", "server_error", "request_rejected", "not_configured"}
+)
 
 
 def system_prompt(spec, locale):
@@ -174,7 +180,32 @@ async def generate_artifact(
     return artifact
 
 
-def _plan(session, events, artifact_types, locales, provider):
+def _settled_attempt(session, event_key, spec, locale, digest):
+    """``rejected``/``failed`` when the latest attempt for exactly this evidence and prompt is a
+    reviewer rejection or a non-transient failure; such tasks wait for an explicit operator run."""
+
+    latest = session.scalars(
+        select(AIArtifact)
+        .where(
+            AIArtifact.entity_type == ENTITY_EVENT,
+            AIArtifact.entity_key == event_key,
+            AIArtifact.artifact_type == spec.artifact_type,
+            AIArtifact.locale == locale,
+            AIArtifact.input_hash == digest,
+        )
+        .order_by(AIArtifact.generated_at.desc())
+        .limit(1)
+    ).first()
+    if latest is None:
+        return None
+    if latest.status == "rejected":
+        return "rejected"
+    if latest.status == "failed" and latest.error_code not in TRANSIENT_ERRORS:
+        return "failed"
+    return None
+
+
+def _plan(session, events, artifact_types, locales, provider, skip_settled=False):
     tasks, counts = [], Counter()
     for event in events:
         evidence = load_event_evidence(session, event.id)
@@ -206,6 +237,11 @@ def _plan(session, events, artifact_types, locales, provider):
                     )
                     .limit(1)
                 )
+                if not cached and skip_settled:
+                    settled = _settled_attempt(session, str(event.id), spec, locale, digest)
+                    if settled:
+                        counts[f"skipped_{settled}"] += 1
+                        continue
                 if stale:
                     counts["stale"] += 1
                 counts["cached" if cached else "would_generate"] += 1
@@ -247,14 +283,20 @@ async def enrich_events(
     dry_run=False,
     provider=None,
     sleep=None,
+    skip_settled=False,
 ):
-    """Generate missing Event insight artifacts; ``dry_run`` sends no request and writes nothing."""
+    """Generate missing Event insight artifacts; ``dry_run`` sends no request and writes nothing.
+
+    ``skip_settled`` (the unattended ``intelligence-update`` stage) leaves a task alone when the
+    latest attempt for its current evidence was rejected by a reviewer or failed non-transiently;
+    the explicit ``ai-event-enrich`` command keeps retrying them as before.
+    """
 
     if provider is None and not dry_run:
         provider = build_provider(settings)
     with session_factory() as session:
         events = select_events(session, event_ids, since, domain, limit)
-        tasks, counts = _plan(session, events, artifact_types, locales, provider)
+        tasks, counts = _plan(session, events, artifact_types, locales, provider, skip_settled)
         event_rows = {}
         for task in tasks:
             event_rows.setdefault(
@@ -272,6 +314,9 @@ async def enrich_events(
         "would_generate": counts["would_generate"],
         "estimated_requests": counts["would_generate"],
     }
+    if skip_settled:
+        result["skipped_rejected"] = counts["skipped_rejected"]
+        result["skipped_failed"] = counts["skipped_failed"]
     if dry_run:
         return result
     outcomes, statuses, errors = Counter(), [], Counter()
