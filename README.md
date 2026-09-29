@@ -617,8 +617,10 @@ other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a ru
   of an older version are reported `stale` until regenerated. Summary and Why It Matters have two
   lineages chosen deterministically from the report languages: primary-locale output (every report
   in the output language: `event_summary_v4`, `event_why_it_matters_v6`) and cross-language output
-  (`event_summary_xlang_v1`, `event_why_it_matters_xlang_v1`, which add translation rules and
+  (`event_summary_xlang_v2`, `event_why_it_matters_xlang_v1`, which add translation rules and
   repeat the output language in the request). A change in one lineage never makes the other stale.
+  Since AI-X1, cross-language Summaries keep every proper name — people, companies, media,
+  organizations, and government bodies — in the reports' script (places are translated).
 - Output must match a closed JSON schema, and deterministic guards must pass: every point cites
   refs of this Event only; no investment advice, price targets, ratings, or market predictions; a
   single-source Event is never described as multiple reports; every figure appears in the
@@ -626,8 +628,12 @@ other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a ru
   (4.2亿元 ↔ 420 million, $11.6 billion ↔ 116亿); the text is in the requested locale.
   Cross-language output is also rejected for a sequence/causal connector ("after which", "as a
   result", 随后, 因此, …) without a signal of the same kind in the reports, and for a Latin ↔
-  Chinese name gloss in parentheses unless the reports give both forms. Any failure stores a
-  `failed` artifact (error code only) and nothing is displayed.
+  Chinese name gloss in parentheses unless the reports give both forms. English cross-language
+  Summaries (v2) are also rejected for a Latin-script name absent from the reports in an
+  attribution, speaker, or institution position, a figure qualifier (up to, about, more than, …)
+  the reports do not state for that figure, and Chinese text that is not copied from the reports
+  or carries Chinese grammar words. Any failure stores a `failed` artifact (error code only) and
+  nothing is displayed.
 - A reviewer hides an artifact that fails the manual audit with `ai-artifact-reject` (the API
   never serves a rejected artifact). `GET /api/v1/events/{id}/ai` reports each insight as
   `available`, `not_generated`, `failed`, `rejected` (withdrawn after review), or `stale` (older
@@ -695,8 +701,9 @@ a verified backup, a bounded `--source gematsu --skip-ai` smoke and then one ful
 `intelligence-update --skip-ai` run succeeded (exit 0): 25/25 sources, ContentItems 366 → 543,
 Events 345 → 520 with every earlier Event unchanged, audit 0 errors / 0 warnings, and no AI
 request. A bounded 5-Event AI catch-up (22 requests) then verified the live AI path and
-fail-closed serving, but every cross-language (Chinese → English) Summary failed review, so that
-lineage needs repair before AI scales; run daily updates with `--skip-ai` meanwhile.
+fail-closed serving but rejected every cross-language (Chinese → English) Summary; AI-X1 repaired
+that lineage (`event_summary_xlang_v2`), and the same five Summaries then passed review (5
+requests). Wider AI use remains an owner decision.
 
 `intelligence-update` is one explicit CLI process that runs the existing services in dependency
 order. It adds no queue, scheduler, or new intelligence logic, and it never runs migrations,
