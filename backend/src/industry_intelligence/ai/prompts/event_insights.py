@@ -205,16 +205,89 @@ written in {language}; only names and short quoted phrases may be in another lan
 point is not in {language}, rewrite it in {language}."""
 
 
-def _cross_language(spec, version):
-    system = spec.system.replace(
-        GROUNDING_RULES,
-        f"{OUTPUT_LANGUAGE_RULES}\n\n{GROUNDING_RULES}\n\n{FINAL_LANGUAGE_CHECK}",
-    )
+# AI-X1 (cross-language Summary v2). The Operations-1 AI catch-up (five single-source Chinese
+# Events, English output) had 0 of 5 servable Summaries under ``event_summary_xlang_v1``: names
+# of a person (内塔尼亚胡 → Netanyahu), a newspaper (《朝日新闻》 → Asahi Shimbun), and
+# government bodies (斯洛伐克财政部, 总务省) were translated; a Chinese particle stayed in English
+# prose (…的恰尼); "up to" was added to a reported 150 小时, and repeated on regeneration. v2
+# makes government bodies explicitly names, states the figure-qualifier rule, and gives
+# correct/incorrect pairs.
+# The examples deliberately use other entities than the five audited Events, so their live
+# re-validation tests the rule rather than memorised strings. These rules belong to the Summary
+# only: ``event_why_it_matters_xlang_v1`` keeps ``OUTPUT_LANGUAGE_RULES`` byte for byte.
+OUTPUT_LANGUAGE_RULES_SUMMARY_V2 = """\
+Output language and length:
+- Write every point in {language}, even when the reports are in another language. Translate \
+the prose of the reports, not their proper names. Only proper names and short quoted phrases \
+may stay in the report's language; never copy a sentence, a clause, or a grammatical word (for \
+example 的, 了, 表示, 认为) of a report in another language.
+- Proper names stay exactly as the reports write them, in the reports' own script, even when \
+you know an official name in {language}. Proper names are the names of: people; companies, \
+banks, and brands; media outlets and publications; named organizations and institutions, \
+including government bodies such as ministries, agencies, bureaus, commissions, and courts; \
+games, products, laws, and named programs. Keep 《》 around a name when the report uses them. \
+Use a form in another script only when a report itself gives that form (a report writing \
+特尔诺夫（Tel Nof） allows Tel Nof).
+- Places are not such names and are written in {language}: countries, regions, provinces, \
+prefectures, and cities (日本 is Japan). So are nationalities, job titles (总理 is prime \
+minister, 社长 is president), descriptions of a person or company, and ordinary words.
+- Never put a translation, romanization, or explanation next to a name, in parentheses or \
+otherwise (never "腾讯 (Tencent)" or "Tencent (腾讯)") unless a report itself gives both forms.
+- Correct and incorrect English output of Chinese reports:
+  马克龙表示… → correct: 马克龙 said … — incorrect: Macron said …
+  据《日本经济新闻》报道… → correct: According to 《日本经济新闻》, … — incorrect: According to \
+Nikkei, …
+  德国财政部下调了预期 → correct: 德国财政部 lowered its forecast — incorrect: Germany's Finance \
+Ministry lowered its forecast
+  国土交通省对该公司展开调查 → correct: 国土交通省 opened an investigation into the company — \
+incorrect: the Ministry of Land, Infrastructure, Transport and Tourism opened …
+  丰田汽车的社长表示 → correct: the president of 丰田汽车 said — incorrect: 丰田汽车的社长 said \
+(的 is Chinese grammar, not part of a name) and incorrect: Toyota's president said
+  In Chinese output of English reports the same holds the other way: a company the reports \
+call Tencent stays Tencent, never 腾讯.
+- Before answering, check every name in your output: if it does not appear character for \
+character in a report, replace it with the report's own form.
+- Figures keep exactly the report's digits, units, and precision with nothing added (never \
+"$100万美元"), and exactly the report's qualifier or none. Add up to, at least, at most, \
+more than, over, less than, under, about, around, approximately, roughly, or nearly only when \
+the report states the same qualifier for that figure (约 is about, 最高 or 不超过 is up to, \
+超过 or 逾 is more than, 不到 is less than). A report saying 续航30小时 gives "30 hours of \
+battery life", never "up to 30 hours".
+- Restating in another language must not change meaning: hedges (may, could, reportedly, \
+拟, 预计, 有报道称) stay hedged, plans stay plans, negations stay negations, an attribution \
+(外界认为, analysts said) stays attached to the same claim, and facts that a report only places \
+side by side stay side by side (never join them with following, after, amid, as a result, or \
+此后).
+- Translate without adding: no qualifier the report does not use (不收费 is "free of charge", \
+not "free of charge for now"), and never make a statement more specific than the report. \
+Background knowledge is not evidence, even when you are certain it is true.
+- Keep each point under 300 characters."""
+
+FINAL_LANGUAGE_CHECK_SUMMARY_V2 = """\
+Final check before answering: the input's output_language is {language}. Every point must be \
+written in {language}; only proper names and short quoted phrases may be in another language, \
+and no grammatical word of another language may remain. Every proper name must appear character \
+for character in a report (never translated), and every figure must carry exactly the \
+report's qualifier or none. Rewrite any point that breaks one of these rules."""
+
+
+def _cross_language(spec, version, rules=OUTPUT_LANGUAGE_RULES, final=FINAL_LANGUAGE_CHECK):
+    system = spec.system.replace(GROUNDING_RULES, f"{rules}\n\n{GROUNDING_RULES}\n\n{final}")
     assert system != spec.system
     return replace(spec, version=version, system=system, cross_language=True)
 
 
+# Superseded by v2 (AI-X1); kept for its stored artifacts and tests, never selected.
 EVENT_SUMMARY_XLANG_V1 = _cross_language(EVENT_SUMMARY_V4, "event_summary_xlang_v1")
+EVENT_SUMMARY_XLANG_V2 = replace(
+    _cross_language(
+        EVENT_SUMMARY_V4,
+        "event_summary_xlang_v2",
+        OUTPUT_LANGUAGE_RULES_SUMMARY_V2,
+        FINAL_LANGUAGE_CHECK_SUMMARY_V2,
+    ),
+    english_output_guards=True,
+)
 EVENT_WHY_IT_MATTERS_XLANG_V1 = _cross_language(
     EVENT_WHY_IT_MATTERS_V6, "event_why_it_matters_xlang_v1"
 )
@@ -222,7 +295,7 @@ EVENT_WHY_IT_MATTERS_XLANG_V1 = _cross_language(
 PRIMARY = "primary"
 CROSS_LANGUAGE = "cross_language"
 CROSS_LANGUAGE_PROMPTS = {
-    spec.artifact_type: spec for spec in (EVENT_SUMMARY_XLANG_V1, EVENT_WHY_IT_MATTERS_XLANG_V1)
+    spec.artifact_type: spec for spec in (EVENT_SUMMARY_XLANG_V2, EVENT_WHY_IT_MATTERS_XLANG_V1)
 }
 
 

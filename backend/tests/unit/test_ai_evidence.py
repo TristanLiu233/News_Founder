@@ -17,11 +17,14 @@ from industry_intelligence.ai.prompts.event_insights import (
     CROSS_LANGUAGE_PROMPTS,
     EVENT_SUMMARY_V4,
     EVENT_SUMMARY_XLANG_V1,
+    EVENT_SUMMARY_XLANG_V2,
     EVENT_WHY_IT_MATTERS_V6,
     EVENT_WHY_IT_MATTERS_XLANG_V1,
     FINAL_LANGUAGE_CHECK,
+    FINAL_LANGUAGE_CHECK_SUMMARY_V2,
     INSIGHT_PROMPTS,
     OUTPUT_LANGUAGE_RULES,
+    OUTPUT_LANGUAGE_RULES_SUMMARY_V2,
     PRIMARY,
     insight_spec,
 )
@@ -46,6 +49,7 @@ ALL_PROMPTS = (
     EVENT_SUMMARY_V4,
     EVENT_WHY_IT_MATTERS_V6,
     EVENT_SUMMARY_XLANG_V1,
+    EVENT_SUMMARY_XLANG_V2,
     EVENT_WHY_IT_MATTERS_XLANG_V1,
     EVENT_ENTITY_CANDIDATES_V1,
     EVENT_PAIR_V1,
@@ -92,7 +96,8 @@ def test_prompt_versions_are_unique_and_explicit():
     # Primary-locale prompts stay the Checkpoint D audited versions.
     assert INSIGHT_PROMPTS["event_summary"].version == "event_summary_v4"
     assert INSIGHT_PROMPTS["event_why_it_matters"].version == "event_why_it_matters_v6"
-    assert CROSS_LANGUAGE_PROMPTS["event_summary"].version == "event_summary_xlang_v1"
+    # AI-X1: the cross-language Summary moved to v2; Why It Matters stays xlang v1.
+    assert CROSS_LANGUAGE_PROMPTS["event_summary"].version == "event_summary_xlang_v2"
     assert CROSS_LANGUAGE_PROMPTS["event_why_it_matters"].version == (
         "event_why_it_matters_xlang_v1"
     )
@@ -139,18 +144,24 @@ def test_why_prompt_forbids_inferred_causation_and_preserves_reported_framing():
 def test_primary_prompts_carry_no_cross_language_rules():
     # Phase 7.1 Checkpoint E: translation rules must not change the audited primary prompts.
     for spec in INSIGHT_PROMPTS.values():
-        assert OUTPUT_LANGUAGE_RULES not in spec.system
+        for rules in (OUTPUT_LANGUAGE_RULES, OUTPUT_LANGUAGE_RULES_SUMMARY_V2):
+            assert rules not in spec.system
         assert FINAL_LANGUAGE_CHECK not in spec.system
+        assert FINAL_LANGUAGE_CHECK_SUMMARY_V2 not in spec.system
         assert spec.system.rstrip().endswith(GROUNDING_RULES)
 
 
 def test_cross_language_prompts_are_the_primary_text_plus_language_rules():
+    rules = {
+        "event_summary": (OUTPUT_LANGUAGE_RULES_SUMMARY_V2, FINAL_LANGUAGE_CHECK_SUMMARY_V2),
+        "event_why_it_matters": (OUTPUT_LANGUAGE_RULES, FINAL_LANGUAGE_CHECK),
+    }
     for artifact_type, spec in CROSS_LANGUAGE_PROMPTS.items():
         primary = INSIGHT_PROMPTS[artifact_type]
+        language, final = rules[artifact_type]
         assert spec.schema == primary.schema and spec.output_model is primary.output_model
         assert spec.system == primary.system.replace(
-            GROUNDING_RULES,
-            f"{OUTPUT_LANGUAGE_RULES}\n\n{GROUNDING_RULES}\n\n{FINAL_LANGUAGE_CHECK}",
+            GROUNDING_RULES, f"{language}\n\n{GROUNDING_RULES}\n\n{final}"
         )
 
 
@@ -159,7 +170,7 @@ def test_cross_language_prompts_keep_names_hedges_and_output_language():
     # (吉宏股份 (Jihong Co.), 日本电产 → Nidec, 广西日报 → Guangxi Daily), points copied in
     # Chinese, an over-long point, "following the report" between juxtaposed facts, and
     # detail added in translation.
-    for spec in CROSS_LANGUAGE_PROMPTS.values():
+    for spec in (EVENT_SUMMARY_XLANG_V1, EVENT_WHY_IT_MATTERS_XLANG_V1):
         system = system_prompt(spec, "en")
         assert "Write every point in English, even when the reports are in another" in system
         assert "never copy a whole sentence or clause" in system
@@ -210,7 +221,7 @@ def test_lineages_hash_separately():
     for artifact_type, spec in CROSS_LANGUAGE_PROMPTS.items():
         primary = INSIGHT_PROMPTS[artifact_type]
         assert input_hash(spec.version, "en", ev) != input_hash(primary.version, "en", ev)
-        assert input_hash(f"{spec.version[:-1]}2", "en", ev) != input_hash(spec.version, "en", ev)
+        assert input_hash(f"{spec.version}9", "en", ev) != input_hash(spec.version, "en", ev)
 
 
 def test_every_prompt_carries_the_grounding_rules():

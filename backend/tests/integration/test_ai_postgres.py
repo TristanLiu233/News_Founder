@@ -300,7 +300,7 @@ def test_primary_and_cross_language_lineages_go_stale_independently(
 
     assert enrich()["generated"] == 2
     versions = {a.locale: a.prompt_version for a in artifacts(db, event.id, status="valid")}
-    assert versions == {"en": "event_summary_v4", "zh-CN": "event_summary_xlang_v1"}
+    assert versions == {"en": "event_summary_v4", "zh-CN": "event_summary_xlang_v2"}
 
     def states():
         return {
@@ -313,7 +313,7 @@ def test_primary_and_cross_language_lineages_go_stale_independently(
     monkeypatch.setitem(
         event_insights.CROSS_LANGUAGE_PROMPTS,
         "event_summary",
-        replace(xlang, version="event_summary_xlang_v2"),
+        replace(xlang, version="event_summary_xlang_v3"),
     )
     assert states() == {"en": "available", "zh-CN": "stale"}
     plan = enrich(dry_run=True)
@@ -330,13 +330,77 @@ def test_primary_and_cross_language_lineages_go_stale_independently(
     assert (result["requests"], result["stale_marked"]) == (1, 1)
     assert states() == {"en": "available", "zh-CN": "available"}
     zh = [a for a in artifacts(db, event.id, locale="zh-CN") if a.status == "valid"]
-    assert [a.prompt_version for a in zh] == ["event_summary_xlang_v1"]
+    assert [a.prompt_version for a in zh] == ["event_summary_xlang_v2"]
     # Phase 7.1 Checkpoint F: rejecting the current artifact while older-version rows exist
     # reads "rejected", never "stale" (the reports did not change).
     current_en = event_ai(db, event.id, "en")["insights"]["event_summary"]["artifact"]["id"]
     reject_artifact(db, UUID(current_en), "manual audit: unsupported wording")
     assert artifacts(db, event.id, locale="en", status="stale")
     assert states() == {"en": "rejected", "zh-CN": "available"}
+
+
+def test_cross_language_summary_v2_supersedes_a_rejected_v1_only_for_that_task(
+    db, factory, settings, sources, tag
+):
+    # AI-X1: a Chinese Event whose English Summary v1 was rejected in review. Under v2 that task
+    # alone is eligible again (the unattended selector does not skip it), the rejected v1 body is
+    # never served, and the primary Summary/Why and the English Why stay cached.
+    from industry_intelligence.services.ai_evidence import input_hash, load_event_evidence
+
+    event, item = make_event(db, sources[2], f"工作室{tag}公布新作", language="zh-CN")
+    evidence = load_event_evidence(db, event.id)
+    v1 = event_insights.EVENT_SUMMARY_XLANG_V1
+    db.add(
+        AIArtifact(
+            entity_type="event",
+            entity_key=str(event.id),
+            artifact_type="event_summary",
+            locale="en",
+            provider="fixture",
+            model="fixture-model",
+            prompt_version=v1.version,
+            input_hash=input_hash(v1.version, "en", evidence),
+            source_content_ids=[str(item.id)],
+            output_json={"points": [{"text": "Rejected v1 text.", "evidence": [str(item.id)]}]},
+            status="rejected",
+            artifact_metadata={},
+        )
+    )
+    db.commit()
+    for locales, types in (
+        (("zh-CN",), ("event_summary", "event_why_it_matters")),
+        (("en",), ("event_why_it_matters",)),
+    ):
+        run(
+            enrich_events(
+                settings,
+                factory,
+                event_ids=[event.id],
+                locales=locales,
+                artifact_types=types,
+                provider=FixtureProvider(insight_responder),
+            )
+        )
+    insight = event_ai(db, event.id, "en")["insights"]["event_summary"]
+    assert (insight["state"], insight["artifact"]) == ("not_generated", None)
+    plan = run(
+        enrich_events(settings, factory, event_ids=[event.id], dry_run=True, skip_settled=True)
+    )
+    assert (plan["tasks"], plan["cached"], plan["would_generate"]) == (4, 3, 1)
+    assert (plan["stale"], plan["skipped_rejected"], plan["skipped_failed"]) == (0, 0, 0)
+    provider = FixtureProvider(insight_responder)
+    result = run(enrich_events(settings, factory, event_ids=[event.id], provider=provider))
+    assert (result["requests"], result["generated"], result["replayed"]) == (1, 1, 3)
+    served = event_ai(db, event.id, "en")["insights"]["event_summary"]
+    assert served["state"] == "available"
+    assert served["artifact"]["prompt_version"] == "event_summary_xlang_v2"
+    assert "Rejected v1 text." not in str(served)
+    assert [a.status for a in artifacts(db, event.id, prompt_version=v1.version)] == ["rejected"]
+    again = FixtureProvider(insight_responder)
+    assert (
+        run(enrich_events(settings, factory, event_ids=[event.id], provider=again))["requests"] == 0
+        and again.calls == []
+    )
 
 
 def test_rejected_artifact_is_never_served_and_regenerates_once(

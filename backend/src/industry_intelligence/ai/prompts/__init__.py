@@ -26,6 +26,10 @@ class PromptSpec:
     # Output in a language other than the evidence's (Phase 7.1 Checkpoint E): the request
     # repeats the output language and cross-language guards apply (``ai_evidence``).
     cross_language: bool = False
+    # English output of other-language reports gets the AI-X1 guards (``ai_evidence``): proper
+    # names translated in attribution/speaker/institution positions, figure qualifiers the
+    # reports do not use, and Chinese text that is not a copied name.
+    english_output_guards: bool = False
 
 
 def object_schema(properties, required=None):

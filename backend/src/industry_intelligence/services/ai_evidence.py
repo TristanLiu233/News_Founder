@@ -16,6 +16,11 @@ prompt's Pydantic model *and* these deterministic guards:
 * for cross-language output (Phase 7.1 Checkpoint E), no sequence/causal connector unless the
   evidence has one of the same kind, and no parenthetical name gloss between Latin and Chinese
   script unless the evidence contains both forms.
+* for English output of other-language reports under a spec with ``english_output_guards``
+  (AI-X1, ``event_summary_xlang_v2``): no Latin-script name absent from the reports in an
+  attribution, speaker, or institution position (a translated name); no figure qualifier (up to,
+  about, more than, …) the reports do not state near that figure; and Chinese text only as runs
+  copied from the reports that do not begin or end with a grammatical word.
 
 A failed guard fails the whole artifact; nothing is repaired or partially kept.
 """
@@ -111,6 +116,226 @@ _GLOSSES = (
     re.compile(rf"(?P<name>{_CJK_NAME})\s*\(\s*(?P<gloss>[A-Z][A-Za-z&.' -]*[A-Za-z.])\s*\)"),
     re.compile(rf"(?P<name>{_LATIN_NAME})\s*\(\s*(?P<gloss>{_CJK_NAME})\s*\)"),
 )
+
+
+# AI-X1: English output of Chinese reports translated proper names although the prompt said not
+# to (内塔尼亚胡 → "Netanyahu said", 《朝日新闻》 → "According to Asahi Shimbun", 斯洛伐克财政部 →
+# "Slovakia's Ministry of Finance"), added "up to" to a reported 150 小时, and kept a Chinese
+# particle in English prose ("…（OTP）的恰尼 said"). Without a dictionary a translated name can only
+# be proven where English grammar marks a name: the source of an attribution, the subject
+# directly before a speech verb, and a capitalized institution name. Such a Latin-script name is
+# accepted only when the reports contain it. Places and nationalities are translated by policy,
+# so they are never checked on their own; the reviewer handles what these positions miss.
+_CAP_WORD = r"[A-Z][A-Za-z0-9&.'’-]*"
+_CAP_PHRASE = rf"{_CAP_WORD}(?:\s+(?:of|and|for|the|&)\s+{_CAP_WORD}|\s+{_CAP_WORD})*"
+_ATTRIBUTION = re.compile(
+    rf"\b(?i:according to|citing|cited by|reported by|quoted by|as reported by)\s+(?:the\s+)?"
+    rf"(?P<name>{_CAP_PHRASE})(?=\s*(?:[,.;:)]|$)|\s+(?:as|that|on|in|and|which|who|report|"
+    rf"reports|reported|said|says|cited|citing)\b)"
+)
+_SPEAKER = re.compile(
+    rf"(?P<name>{_CAP_PHRASE})(?:'s|’s)?\s+(?:said|says|stated|states|told|noted|claimed|warned|"
+    rf"denied|announced|apologi[sz]ed|reported|reports|revealed|confirmed|disclosed)\b"
+)
+_INSTITUTION = re.compile(
+    rf"(?P<name>(?:{_CAP_WORD}(?:'s|’s)?\s+)*(?:Ministry|Bureau|Department|Commission|Committee|"
+    rf"Agency|Administration|Council|Parliament|Court|Bank|Exchange|Association|Federation|"
+    rf"Institute|University|Corporation|Holdings|Group|Shimbun|Times|Daily|Journal|Act)"
+    rf"(?:\s+of(?:\s+the)?\s+{_CAP_WORD}(?:\s+(?:and\s+)?{_CAP_WORD})*)?)\b"
+)
+# Capitalized words that are not names: sentence starts and pronouns, and job titles (translated
+# by policy, "the studio's CEO revealed").
+_NOT_NAMES = {
+    "a",
+    "an",
+    "the",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "he",
+    "she",
+    "they",
+    "we",
+    "his",
+    "her",
+    "their",
+    "our",
+    "ceo",
+    "cfo",
+    "cto",
+    "coo",
+    "chairman",
+    "chairwoman",
+    "chair",
+    "president",
+    "vice",
+    "prime",
+    "minister",
+    "premier",
+    "mayor",
+    "governor",
+    "director",
+    "chief",
+    "executive",
+    "officer",
+    "founder",
+    "co-founder",
+    "spokesperson",
+    "spokesman",
+    "spokeswoman",
+    "chancellor",
+    "secretary",
+    "general",
+    "manager",
+    "head",
+    "leader",
+    "analysts",
+    "analyst",
+}
+
+
+def _head(name):
+    return re.sub(r"(?:'s|’s)$", "", name.split()[-1]).strip(".")
+
+
+def translated_name_errors(text, evidence_text):
+    """Latin-script names in name positions that no report contains (a translated name)."""
+
+    evidence = evidence_text.casefold()
+    errors, seen = [], set()
+    for kind, pattern in (("attribution", _ATTRIBUTION), ("speaker", _SPEAKER)):
+        for match in pattern.finditer(text):
+            name = match.group("name")
+            head = _head(name)
+            if head.casefold() in _NOT_NAMES or head.casefold() in evidence or name in seen:
+                continue
+            seen.add(name)
+            errors.append(f"{kind} name not in evidence {name!r}: {text[:80]!r}")
+    for match in _INSTITUTION.finditer(text):
+        name = re.sub(r"^(?:The|A|An)\s+", "", match.group("name"))
+        if name.casefold() not in evidence and name not in seen:
+            seen.add(name)
+            errors.append(f"institution name not in evidence {name!r}: {text[:80]!r}")
+    return errors
+
+
+# Figure qualifiers: a qualifier directly before a figure in the output must be supported by a
+# qualifier of the same kind next to the same figure in the reports (anywhere in the reports when
+# the figure itself is written differently there, for example a scaled equivalent).
+_QUALIFIER = re.compile(
+    r"\b(?P<q>up to|at most|no more than|as many as|as much as|a maximum of|at least|no less than|"
+    r"more than|over|above|in excess of|exceeding|upwards of|less than|fewer than|under|below|"
+    r"nearly|almost|about|around|approximately|roughly|close to|some|an estimated|circa)\s+"
+    r"(?:(?:US|HK|RMB|CNY|USD|EUR)\s?)?[$€£¥]?\s?(?P<n>\d[\d,]*(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_QUALIFIER_KIND = {
+    **dict.fromkeys(
+        ("up to", "at most", "no more than", "as many as", "as much as", "a maximum of"), "upper"
+    ),
+    **dict.fromkeys(
+        (
+            "at least",
+            "no less than",
+            "more than",
+            "over",
+            "above",
+            "in excess of",
+            "exceeding",
+            "upwards of",
+        ),
+        "lower",
+    ),
+    **dict.fromkeys(("less than", "fewer than", "under", "below"), "less"),
+    **dict.fromkeys(
+        (
+            "nearly",
+            "almost",
+            "about",
+            "around",
+            "approximately",
+            "roughly",
+            "close to",
+            "some",
+            "an estimated",
+            "circa",
+        ),
+        "approx",
+    ),
+}
+_EVIDENCE_QUALIFIERS = {
+    "upper": re.compile(
+        r"最高|最多|至多|多达|不超过|不高于|上限|以内|up to|at most|no more than|as many as|"
+        r"as much as|maximum",
+        re.IGNORECASE,
+    ),
+    # Single characters count only next to the digits (100多, 20余); 超长 or 多端 are not
+    # qualifiers.
+    "lower": re.compile(
+        r"至少|超过|超出|逾|以上|不低于|不少于|多达|(?<=\d)\s?[多余]|at least|more than|over|above|"
+        r"in excess of|exceeding|upwards of",
+        re.IGNORECASE,
+    ),
+    "less": re.compile(r"不到|不足|低于|少于|以下|less than|fewer than|under|below", re.IGNORECASE),
+    "approx": re.compile(
+        r"约|大约|大概|近(?=\s?\d)|将近|接近|左右|上下|估计|about|around|approximately|roughly|"
+        r"nearly|almost|some|estimated|circa",
+        re.IGNORECASE,
+    ),
+}
+
+
+def qualifier_errors(text, evidence_text):
+    """Figure qualifiers in the output that the reports do not state for that figure."""
+
+    evidence = re.sub(r"(?<=\d),(?=\d)", "", evidence_text)
+    errors = []
+    for match in _QUALIFIER.finditer(text):
+        qualifier, number = match.group("q"), match.group("n").replace(",", "").rstrip(".")
+        signal = _EVIDENCE_QUALIFIERS[_QUALIFIER_KIND[qualifier.lower()]]
+        spots = [
+            m.start() for m in re.finditer(rf"(?<![\d.]){re.escape(number)}(?![\d])", evidence)
+        ]
+        windows = [evidence[max(0, at - 12) : at + len(number) + 8] for at in spots] or [evidence]
+        if not any(signal.search(window) for window in windows):
+            errors.append(f"figure qualifier not in evidence {match.group(0)!r}: {text[:80]!r}")
+    return errors
+
+
+# Chinese text in English output: only runs copied from the reports (names, short quotes, copied
+# figures such as 4.2亿元), and never a run that starts or ends with a grammatical word
+# ("…（OTP）的恰尼"). Titles inside 《》 are exempt from the edge rule (《我的世界》).
+_CJK_RUN = re.compile(r"[㐀-鿿豈-﫿·・]+")
+_TITLE = re.compile(r"《[^》]*》")
+_GRAMMAR_START = ("的", "了", "着", "及", "被")
+_GRAMMAR_END = ("的", "了", "着", "表示", "认为", "指出", "宣布", "透露", "称")
+
+
+def script_leakage_errors(text, evidence_text):
+    """Chinese runs in English output that were not copied, or that carry Chinese grammar."""
+
+    titles = [m.span() for m in _TITLE.finditer(text)]
+    errors = []
+    for match in _CJK_RUN.finditer(text):
+        run = match.group(0)
+        if run not in evidence_text:
+            errors.append(f"Chinese text not copied from the reports {run!r}: {text[:80]!r}")
+            continue
+        in_title = any(start < match.start() and match.end() < end for start, end in titles)
+        if not in_title and (run.startswith(_GRAMMAR_START) or run.endswith(_GRAMMAR_END)):
+            errors.append(f"Chinese grammatical word in English text {run!r}: {text[:80]!r}")
+    return errors
+
+
+def english_output_errors(text, evidence_text):
+    return (
+        translated_name_errors(text, evidence_text)
+        + qualifier_errors(text, evidence_text)
+        + script_leakage_errors(text, evidence_text)
+    )
 
 
 @dataclass(frozen=True)
@@ -409,4 +634,6 @@ def validate_output(spec, data, mapping, items, locale=None, source_count=None):
             errors.append(f"text is not in locale {locale}: {text[:80]!r}")
         if spec.cross_language:
             errors.extend(cross_language_errors(_nfkc(text), evidence_text))
+        if spec.english_output_guards and locale == "en":
+            errors.extend(english_output_errors(_nfkc(text), evidence_text))
     return ValidationOutcome(None if errors else output, errors)
