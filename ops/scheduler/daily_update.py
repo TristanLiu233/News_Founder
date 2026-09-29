@@ -34,7 +34,7 @@ def system_zone():
 
 
 def main(extra):
-    # launchd's StartCalendarInterval fires in the system time zone, so the 08:00 contract holds
+    # launchd's StartCalendarInterval fires in the system time zone, so the 10:00 contract holds
     # only while the system zone is Australia/Sydney. Refuse rather than run at another local time.
     zone = system_zone()
     if zone != EXPECTED_ZONE:

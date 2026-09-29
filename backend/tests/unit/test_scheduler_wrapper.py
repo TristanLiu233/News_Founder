@@ -46,10 +46,10 @@ def test_refuses_outside_sydney_without_running(wrapper, monkeypatch, capsys):
     assert "event=refused" in capsys.readouterr().out
 
 
-def test_plist_template_schedules_08_00_with_the_wrapper():
+def test_plist_template_schedules_10_00_with_the_wrapper():
     plist = plistlib.loads(TEMPLATE.read_bytes())
 
-    assert plist["StartCalendarInterval"] == {"Hour": 8, "Minute": 0}
+    assert plist["StartCalendarInterval"] == {"Hour": 10, "Minute": 0}
     assert plist["RunAtLoad"] is False
     assert plist["ProgramArguments"] == [
         "__PROJECT_ROOT__/.venv/bin/python",

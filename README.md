@@ -810,10 +810,11 @@ python -m industry_intelligence.cli source-health --json
 - **Never automatic:** migrations, repairs (`--apply`), reviewed merges, `event-rebuild`, company
   profile ingestion, embeddings, and cross-language AI.
 
-## Scheduler-1 — Daily update at 08:00 Australia/Sydney
+## Scheduler-1 — Daily update at 10:00 Australia/Sydney
 
 Status (2026-09-30): **enabled and verified** on the development Mac. A macOS launchd agent runs
-the one scheduler command daily at 08:00 Australia/Sydney. Scheduled AI is off.
+the one scheduler command daily at 10:00 Australia/Sydney (moved from the initial 08:00 on
+2026-09-30). Scheduled AI is off.
 
 - **Mechanism:** a per-user launchd agent (`~/Library/LaunchAgents/local.industry-intelligence.daily-update.plist`,
   generated from `ops/scheduler/local.industry-intelligence.daily-update.plist.template`).
@@ -827,14 +828,14 @@ the one scheduler command daily at 08:00 Australia/Sydney. Scheduled AI is off.
   authoritative. The wrapper is Python rather than a shell script because macOS privacy
   protection denies a launchd-started `/bin/sh` access to `~/Documents` (exit 126, "Operation not
   permitted"); the Python app already has that access on this Mac.
-- **Time zone:** launchd's `StartCalendarInterval` (`Hour` 8, `Minute` 0) fires in the system
-  time zone, which is Australia/Sydney, so the run follows daylight saving (08:00 AEST or AEDT);
+- **Time zone:** launchd's `StartCalendarInterval` (`Hour` 10, `Minute` 0) fires in the system
+  time zone, which is Australia/Sydney, so the run follows daylight saving (10:00 AEST or AEDT);
   no UTC offset is written anywhere. If the system time zone is changed, the wrapper refuses to
   run (exit 78, `event=refused` in the log) rather than run at another local time. A Mac asleep at
-  08:00 runs the job once when it wakes; a Mac that is off, or with the user logged out, skips
+  10:00 runs the job once when it wakes; a Mac that is off, or with the user logged out, skips
   that day.
 - **Database:** PostgreSQL comes from Docker (`docker compose up -d`); the container has no
-  restart policy and Docker Desktop is not a login item, so the database must be up at 08:00.
+  restart policy and Docker Desktop is not a login item, so the database must be up at 10:00.
   If it is not, the precheck fails and the run exits `1` with nothing written.
 - **Logs:** `~/Library/Logs/industry-intelligence/daily-update.log` (stdout and stderr, appended;
   the wrapper adds `event=start` / `event=finish exit=N` lines, which also cover failures before
