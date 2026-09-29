@@ -769,7 +769,8 @@ python -m industry_intelligence.cli intelligence-update --run-id 20260929T000000
 
 Status (2026-09-30): **complete.** `intelligence-update` is now safe to invoke from an external
 scheduler: one run at a time (PostgreSQL advisory lock), every run and source attempt recorded,
-and a read-only `source-health` report. No scheduler is configured. Migration `20260930_12` adds
+and a read-only `source-health` report. Operations-2 itself configured no scheduler (Scheduler-1,
+below, added one). Migration `20260930_12` adds
 two operational tables (`update_runs`, `source_attempts`); no existing table changed.
 
 ```bash
@@ -808,3 +809,61 @@ python -m industry_intelligence.cli source-health --json
   precheck fails). Exit code 2 remains argparse's usage error.
 - **Never automatic:** migrations, repairs (`--apply`), reviewed merges, `event-rebuild`, company
   profile ingestion, embeddings, and cross-language AI.
+
+## Scheduler-1 — Daily update at 08:00 Australia/Sydney
+
+Status (2026-09-30): **enabled and verified** on the development Mac. A macOS launchd agent runs
+the one scheduler command daily at 08:00 Australia/Sydney. Scheduled AI is off.
+
+- **Mechanism:** a per-user launchd agent (`~/Library/LaunchAgents/local.industry-intelligence.daily-update.plist`,
+  generated from `ops/scheduler/local.industry-intelligence.daily-update.plist.template`).
+  launchd is the native scheduler on macOS; cron is legacy there, and Docker, GitHub Actions, and
+  systemd are not part of this host.
+- **Command:** launchd starts `.venv/bin/python ops/scheduler/daily_update.py`, which runs exactly
+  `python -m industry_intelligence.cli intelligence-update --skip-ai` from `backend/` with a
+  minimal environment (`PATH`, `HOME`, `LANG`, `PYTHONUNBUFFERED`). Configuration comes only from
+  the root `.env` through `Settings`; no secret is copied into the plist or the wrapper. The
+  Operations-2 lock, precheck, postcheck, `update_runs`, and `source_attempts` stay
+  authoritative. The wrapper is Python rather than a shell script because macOS privacy
+  protection denies a launchd-started `/bin/sh` access to `~/Documents` (exit 126, "Operation not
+  permitted"); the Python app already has that access on this Mac.
+- **Time zone:** launchd's `StartCalendarInterval` (`Hour` 8, `Minute` 0) fires in the system
+  time zone, which is Australia/Sydney, so the run follows daylight saving (08:00 AEST or AEDT);
+  no UTC offset is written anywhere. If the system time zone is changed, the wrapper refuses to
+  run (exit 78, `event=refused` in the log) rather than run at another local time. A Mac asleep at
+  08:00 runs the job once when it wakes; a Mac that is off, or with the user logged out, skips
+  that day.
+- **Database:** PostgreSQL comes from Docker (`docker compose up -d`); the container has no
+  restart policy and Docker Desktop is not a login item, so the database must be up at 08:00.
+  If it is not, the precheck fails and the run exits `1` with nothing written.
+- **Logs:** `~/Library/Logs/industry-intelligence/daily-update.log` (stdout and stderr, appended;
+  the wrapper adds `event=start` / `event=finish exit=N` lines, which also cover failures before
+  a run can be recorded). A run adds a few KB; truncate the file by hand if it grows. Run
+  history lives in `update_runs` / `source_attempts`, read through `source-health`.
+
+```bash
+# Install or reinstall (absolute paths are filled in from the template)
+ROOT="$PWD"; LOG="$HOME/Library/Logs/industry-intelligence"; mkdir -p "$LOG"
+sed -e "s|__PROJECT_ROOT__|$ROOT|g" -e "s|__LOG_DIR__|$LOG|g" ops/scheduler/local.industry-intelligence.daily-update.plist.template > ~/Library/LaunchAgents/local.industry-intelligence.daily-update.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.industry-intelligence.daily-update.plist
+
+# Inspect the registered state (calendar descriptor, arguments, runs, last exit code)
+launchctl print gui/$(id -u)/local.industry-intelligence.daily-update
+
+# Disable (unload) and enable again
+launchctl bootout gui/$(id -u)/local.industry-intelligence.daily-update
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.industry-intelligence.daily-update.plist
+
+# Read-only preflight through the same wrapper (appends --plan; no network, no write)
+.venv/bin/python ops/scheduler/daily_update.py --plan
+
+# After a run or an incident
+tail -n 60 ~/Library/Logs/industry-intelligence/daily-update.log
+cd backend && ../.venv/bin/python -m industry_intelligence.cli source-health
+```
+
+Exit codes in the log and in `launchctl print` are the command's: `0` success, `3` degraded
+(isolated source or recording failures; check `source-health`), `1` failed (a fatal stage failed;
+earlier stages may have committed; investigate before the next run), `4` already running
+(another update held the lock; nothing was done), `78` refused by the wrapper (system time zone).
+Running the wrapper by hand (without `--plan`) performs a real update.

@@ -40,6 +40,15 @@ DATABASE_URL=postgresql+psycopg://…/industry_intelligence_test ../.venv/bin/py
 # backend/ — source health from recorded attempts (read-only, no network request)
 ../.venv/bin/python -m industry_intelligence.cli source-health --json
 
+# repository root — the daily launchd agent (Scheduler-1): 08:00 Australia/Sydney, runs exactly
+# `intelligence-update --skip-ai` through ops/scheduler/daily_update.py; log in
+# ~/Library/Logs/industry-intelligence/daily-update.log. Inspect / disable / enable:
+launchctl print gui/$(id -u)/local.industry-intelligence.daily-update
+launchctl bootout gui/$(id -u)/local.industry-intelligence.daily-update
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.industry-intelligence.daily-update.plist
+# read-only preflight through the same wrapper (running it without --plan is a real update)
+.venv/bin/python ops/scheduler/daily_update.py --plan
+
 # backend/ — one bounded content run: ingest all content sources → link new items → event-build
 ../.venv/bin/python -m industry_intelligence.cli content-update-all
 # backend/ — recompute content ↔ subject links (preview first), then derived Event links
@@ -88,6 +97,8 @@ Tests marked `integration` (`tests/integration/`) connect to the database from t
 **Daily update (Operations-1)** (`services/intelligence_update.py`, CLI `intelligence-update`) only orchestrates existing services, each stage in its own transaction (sources one transaction each): read-only precheck (DB, Alembic head, `data-quality-audit` errors block) → ranking `ingest` (batch key from the run ID, so `--run-id` retries replay) → `rank_domain` → `ingest_company_ranking` for rankings with `daily_update` (Wikipedia is manual-only) → `ingest_content` → `relink_all_content` + `relink_all_companies` → incremental `build_events` + `relink_all_events` (never rebuilds or retires Events) → `enrich_events(skip_settled=True)` (skips reviewer rejections and non-transient failures) → read-only postcheck. Source failures are isolated per source; a failed `links`/`events` stage skips its dependants. `StageResult`/`UpdateResult` carry counts and safe error categories; `render_text` prints the operator summary. Its PostgreSQL tests skip unless the database name ends in `_test`.
 
 **Operations-2** (`services/update_operations.py`, `services/source_health.py`, `services/ingestion_phase.py`, `db/models/operations.py`, migration `20260930_12`): the CLI's real run is `execute_update`, which wraps the lock-free `run_update`. It takes `UpdateLock` (`pg_try_advisory_lock` on the two-int4 `UPDATE_LOCK_KEY`, on a dedicated `NullPool` autocommit connection held for the whole run; never an ordinary stage session) and returns `already_running` (exit 4) with no request or write when it is held. Under the lock `RunRecorder` marks stale `running` `update_runs` rows `interrupted`, records the run, one append-only `source_attempts` row per attempted source (via the `record` callback of `_each_source`), and the final status; recording failures only degrade the run. The three ingestion services wrap fetch and persist in `ingestion_phase(...)`, which only tags the re-raised exception, so `error_detail` reports `transport`/`parse`/`persist`/`other`. `source-health` derives health (`never_run`, `failing`, `degraded` = latest attempt rejected rows, `healthy`) on read from the current automatic registry (`select_sources()`) left-joined with attempts; there is no current-health table. `plan_update` never takes the lock and only reports `lock_state`.
+
+**Scheduler-1** (`ops/scheduler/`): a per-user launchd agent (`local.industry-intelligence.daily-update`, installed from `local.industry-intelligence.daily-update.plist.template` into `~/Library/LaunchAgents/` with absolute paths filled in) fires at `StartCalendarInterval` 08:00 in the system time zone (Australia/Sydney, so DST is followed; no UTC offset anywhere). launchd starts `.venv/bin/python ops/scheduler/daily_update.py` directly — a launchd-started `/bin/sh` is denied `~/Documents` by macOS privacy protection (exit 126) — and the wrapper runs `python -m industry_intelligence.cli intelligence-update --skip-ai` from `backend/` with a minimal environment (configuration only from the root `.env`), logs `event=start`/`event=finish exit=N`, and refuses with exit 78 when the system zone is not Australia/Sydney. There is no scheduler-level lock or once-per-day rule: the Operations-2 advisory lock is the only concurrency control. `tests/unit/test_scheduler_wrapper.py` covers the command, the refusal, and the template.
 
 **Search** (`services/search_index.py`, `services/search.py`): `refresh_subject()` rebuilds one subject's `SearchDocument` (aliases plus bounded recent titles; the FTS `tsvector` is a generated column). `search()` gathers lexical candidates, plus pgvector candidates when an `EmbeddingProvider` (`ai/embeddings.py`) is configured, and combines them with `fuse()`. This is a separate RRF context from Trending.
 
