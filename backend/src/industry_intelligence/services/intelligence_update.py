@@ -28,9 +28,16 @@ transaction boundary, so a failure never rolls back work an earlier stage commit
 
 Source failures are isolated per source. A failed ``links`` stage skips ``events`` and ``ai``;
 a failed ``events`` stage skips ``ai``. Status: ``failed`` when a precheck, postcheck, or
-required stage failed, or every attempted source of a group failed; ``degraded`` when some
-sources or the optional AI stage failed; otherwise ``success``. Repairs, merges, migrations,
+required stage failed, or every attempted source of a group failed; ``degraded`` when the
+orchestration completed but one or more isolated operations failed (some sources, the optional
+AI stage, or recording the run history); otherwise ``success``. Repairs, merges, migrations,
 rebuilds, and profile ingestion are never part of this run.
+
+Operations-2: ``execute_update`` (the CLI's real run) first takes the global update lock
+(``update_operations.UpdateLock``); when another run holds it the result is ``already_running``
+with no request and no write. Under the lock it records the run in ``update_runs`` and every
+source attempt in ``source_attempts`` (the facts behind ``source-health``). ``plan_update``
+never takes the lock and only reports whether it is held right now.
 """
 
 from __future__ import annotations
@@ -61,11 +68,14 @@ from industry_intelligence.db.models import (
 from industry_intelligence.db.models.ai import AIArtifact
 from industry_intelligence.db.models.search import SubjectRedirect
 from industry_intelligence.domain.enums import Domain
+from industry_intelligence.services.ingestion_phase import failure_phase
 
 logger = logging.getLogger(__name__)
 
 SUCCESS, DEGRADED, FAILED, SKIPPED = "success", "degraded", "failed", "skipped"
-EXIT_CODES = {SUCCESS: 0, FAILED: 1, DEGRADED: 3}  # 2 is argparse's usage error
+ALREADY_RUNNING = "already_running"
+# 2 is argparse's usage error; 4 means another run holds the lock and nothing was done.
+EXIT_CODES = {SUCCESS: 0, FAILED: 1, DEGRADED: 3, ALREADY_RUNNING: 4}
 DEFAULT_AI_LIMIT = 10
 ALEMBIC_INI = Path(__file__).resolve().parents[3] / "alembic.ini"
 
@@ -89,6 +99,7 @@ class UpdateResult:
     status: str = SUCCESS
     stages: list = field(default_factory=list)
     deltas: dict = field(default_factory=dict)
+    recording: dict | None = None
 
     @property
     def exit_code(self):
@@ -110,10 +121,10 @@ def ranking_batch_key(run_id):
 
 
 def error_detail(key, exc):
-    """A safe, categorised error: exception type, category, and HTTP status only (no message,
-    headers, or URL parameters)."""
+    """A safe, categorised error: exception type, category, failing phase, and HTTP status only
+    (no message, headers, or URL parameters)."""
 
-    detail = {"source": key, "error": type(exc).__name__}
+    detail = {"source": key, "error": type(exc).__name__, "phase": failure_phase(exc)}
     if isinstance(exc, httpx.HTTPStatusError):
         detail["category"] = "http_status"
         detail["status_code"] = exc.response.status_code
@@ -241,12 +252,17 @@ def _source_status(stage):
         stage.status = DEGRADED
 
 
-async def _each_source(stage, keys, ingest_one, keep):
+async def _each_source(stage, keys, ingest_one, keep, record=None, kind=None):
+    """Ingest each source in turn; ``record`` (under the update lock) stores every attempt."""
+
     for key in keys:
+        started_at = datetime.now(UTC)
         try:
             result = await ingest_one(key)
         except Exception as exc:
             detail = error_detail(key, exc)
+            if record is not None:
+                record(kind, key, started_at, datetime.now(UTC), detail=detail)
             logger.warning(
                 "stage=%s source=%s event=source_failed error=%s category=%s",
                 stage.name,
@@ -256,11 +272,13 @@ async def _each_source(stage, keys, ingest_one, keep):
             )
             stage.sources.append(detail)
             continue
+        if record is not None:
+            record(kind, key, started_at, datetime.now(UTC), result=result)
         stage.sources.append({"source": key, **{name: result.get(name) for name in keep}})
     _source_status(stage)
 
 
-async def ranking_stage(settings, session_factory, keys, run_id):
+async def ranking_stage(settings, session_factory, keys, run_id, record=None):
     from industry_intelligence.services.source_ingestion import ingest
 
     stage = StageResult("rankings")
@@ -270,6 +288,8 @@ async def ranking_stage(settings, session_factory, keys, run_id):
         keys,
         lambda key: ingest(key, settings, session_factory, batch_key),
         ("fetched_count", "persisted_count", "skipped_count", "failed_count", "replayed"),
+        record,
+        "ranking",
     )
     ok = [row for row in stage.sources if "error" not in row]
     stage.counts["observations_persisted"] = sum(row["persisted_count"] or 0 for row in ok)
@@ -277,7 +297,7 @@ async def ranking_stage(settings, session_factory, keys, run_id):
     return stage
 
 
-async def company_ranking_stage(settings, session_factory, keys):
+async def company_ranking_stage(settings, session_factory, keys, record=None):
     from industry_intelligence.services.company_ranking_ingestion import ingest_company_ranking
 
     stage = StageResult("company_rankings")
@@ -286,11 +306,13 @@ async def company_ranking_stage(settings, session_factory, keys):
         keys,
         lambda key: ingest_company_ranking(key, settings, session_factory),
         ("snapshot_key", "status", "persisted_count", "replayed", "unchanged"),
+        record,
+        "company_ranking",
     )
     return stage
 
 
-async def content_stage(settings, session_factory, keys):
+async def content_stage(settings, session_factory, keys, record=None):
     from industry_intelligence.services.content_ingestion import ingest_content
 
     stage = StageResult("content")
@@ -308,6 +330,8 @@ async def content_stage(settings, session_factory, keys):
             "link_count",
             "link_error",
         ),
+        record,
+        "content",
     )
     ok = [row for row in stage.sources if "error" not in row]
     for name in ("persisted_count", "replayed_count", "invalid_count", "link_count"):
@@ -511,11 +535,18 @@ async def run_update(
     provider=None,
     check=migration_state,
     audit=run_audit,
+    recorder=None,
+    started_at=None,
 ):
-    """Run every stage once; returns an ``UpdateResult`` (never raises for a stage failure)."""
+    """Run every stage once; returns an ``UpdateResult`` (never raises for a stage failure).
+
+    This is the lock-free core; ``execute_update`` wraps it with the global lock and the run
+    history (``recorder``)."""
 
     run_id = run_id or new_run_id()
-    result = UpdateResult(run_id=run_id, started_at=datetime.now(UTC).isoformat())
+    started_at = started_at or datetime.now(UTC)
+    result = UpdateResult(run_id=run_id, started_at=started_at.isoformat())
+    record = recorder.attempt if recorder is not None else None
     rank_keys, company_keys, content_keys = select_sources(sources)
     started = perf_counter()
     precheck = _finish(check_state(session_factory, settings, check, audit), started)
@@ -533,10 +564,13 @@ async def run_update(
 
     db = session_factory
     steps = (
-        ("rankings", lambda: ranking_stage(settings, db, rank_keys, run_id)),
+        ("rankings", lambda: ranking_stage(settings, db, rank_keys, run_id, record=record)),
         ("composite", lambda: composite_stage(settings, db)),
-        ("company_rankings", lambda: company_ranking_stage(settings, db, company_keys)),
-        ("content", lambda: content_stage(settings, db, content_keys)),
+        (
+            "company_rankings",
+            lambda: company_ranking_stage(settings, db, company_keys, record=record),
+        ),
+        ("content", lambda: content_stage(settings, db, content_keys, record=record)),
         ("links", lambda: links_stage(db)),
         ("events", lambda: events_stage(db)),
         ("ai", ai),
@@ -561,6 +595,122 @@ async def run_update(
     return result
 
 
+def _stage_summary(result):
+    """What ``update_runs.stage_summary`` keeps: statuses, reasons, durations, failed sources,
+    and deltas (never logs, messages, or tracebacks)."""
+
+    return {
+        "stages": [
+            {
+                "name": stage.name,
+                "status": stage.status,
+                "reason": stage.reason,
+                "duration_ms": stage.duration_ms,
+                "failed_sources": [row["source"] for row in stage.sources if "error" in row],
+            }
+            for stage in result.stages
+        ],
+        "deltas": result.deltas,
+    }
+
+
+async def execute_update(
+    settings,
+    session_factory,
+    *,
+    run_id=None,
+    sources=None,
+    skip_ai=False,
+    ai_limit=DEFAULT_AI_LIMIT,
+    provider=None,
+    check=migration_state,
+    audit=run_audit,
+    lock=None,
+):
+    """The real, lock-protected run behind ``intelligence-update``.
+
+    1. ``pg_try_advisory_lock`` on a dedicated connection; held elsewhere → ``already_running``
+       (exit 4) with no source request, provider request, or write.
+    2. Under the lock: mark abandoned ``running`` rows ``interrupted``, record this run.
+    3. ``run_update`` (every stage, each source attempt recorded).
+    4. Record the final status; release the lock (``finally``; PostgreSQL also releases it if
+       the process dies)."""
+
+    from industry_intelligence.services.update_operations import RunRecorder, UpdateLock
+
+    run_id = run_id or new_run_id()
+    started_at = datetime.now(UTC)
+    lock = lock or UpdateLock(settings.database_url)
+    try:
+        acquired = lock.acquire()
+    except Exception as exc:
+        lock.release()
+        stage = StageResult("lock", status=FAILED, reason="database_unavailable")
+        stage.errors.append({"error": type(exc).__name__})
+        return UpdateResult(
+            run_id=run_id,
+            started_at=started_at.isoformat(),
+            finished_at=datetime.now(UTC).isoformat(),
+            status=FAILED,
+            stages=[stage],
+        )
+    if not acquired:
+        lock.release()  # nothing held; only disposes the dedicated engine
+        logger.warning("run=%s event=update_refused status=%s", run_id, ALREADY_RUNNING)
+        return UpdateResult(
+            run_id=run_id,
+            started_at=started_at.isoformat(),
+            finished_at=datetime.now(UTC).isoformat(),
+            status=ALREADY_RUNNING,
+            stages=[StageResult("lock", status=SKIPPED, reason=ALREADY_RUNNING)],
+        )
+    try:
+        recorder = RunRecorder(session_factory)
+        recorder.open(
+            run_id,
+            started_at,
+            {
+                "sources": sorted(sources) if sources else None,
+                "skip_ai": skip_ai,
+                "ai_limit": ai_limit,
+            },
+        )
+        try:
+            result = await run_update(
+                settings,
+                session_factory,
+                run_id=run_id,
+                sources=sources,
+                skip_ai=skip_ai,
+                ai_limit=ai_limit,
+                provider=provider,
+                check=check,
+                audit=audit,
+                recorder=recorder,
+                started_at=started_at,
+            )
+        except Exception as exc:
+            logger.error("run=%s event=update_crashed error=%s", run_id, type(exc).__name__)
+            stage = StageResult("orchestration", status=FAILED, reason="unexpected_error")
+            stage.errors.append({"error": type(exc).__name__})
+            result = UpdateResult(
+                run_id=run_id,
+                started_at=started_at.isoformat(),
+                finished_at=datetime.now(UTC).isoformat(),
+                status=FAILED,
+                stages=[stage],
+            )
+        if recorder.failed and result.status == SUCCESS:
+            result.status = DEGRADED
+        recorder.close(result.status, result.exit_code, _stage_summary(result))
+        if recorder.failed and result.status == SUCCESS:
+            result.status = DEGRADED
+        result.recording = recorder.summary()
+        return result
+    finally:
+        lock.release()
+
+
 async def plan_update(
     settings,
     session_factory,
@@ -575,10 +725,12 @@ async def plan_update(
     database write (read-only transactions; the AI part is ``enrich_events(dry_run=True)``)."""
 
     from industry_intelligence.services.content_ingestion import relink_all_content
+    from industry_intelligence.services.update_operations import lock_state
 
     ranking_keys, company_keys, content_keys = select_sources(sources)
     precheck = check_state(session_factory, settings, check, audit)
     plan = {
+        "status": "plan",
         "precheck": asdict(precheck),
         "stages": [
             {"stage": "rankings", "sources": ranking_keys},
@@ -599,6 +751,11 @@ async def plan_update(
     session = session_factory()
     try:
         session.execute(text("SET TRANSACTION READ ONLY"))
+        plan["lock"] = {
+            "state": lock_state(session),
+            "note": "informational only; a real run takes the lock itself and refuses to start "
+            "while another run holds it",
+        }
         relink = relink_all_content(session, dry_run=True)
         plan["stages"][4]["content_link_preview"] = {
             key: relink[key] for key in ("links", "added", "removed", "strategy_changed")
@@ -629,6 +786,12 @@ def _counts(counts):
 
 
 def render_text(result):
+    if result.status == ALREADY_RUNNING:
+        return (
+            f"Intelligence Update {result.run_id}\n\n"
+            "Another intelligence-update holds the update lock; nothing was requested or "
+            "written.\n\nOverall: ALREADY_RUNNING"
+        )
     lines = [f"Intelligence Update {result.run_id}", ""]
     for stage in result.stages:
         head = f"{stage.name}: {stage.status.upper()}"
@@ -647,5 +810,16 @@ def render_text(result):
             lines.append(f"  error: {_counts(error)}")
     if result.deltas:
         lines += ["", f"Database changes: {_counts(result.deltas)}"]
+    if result.recording is not None:
+        recording = result.recording
+        line = (
+            f"Run history: run recorded {'yes' if recording['run_recorded'] else 'NO'}, "
+            f"attempts recorded {recording['attempts_recorded']}"
+        )
+        if recording["attempts_unrecorded"]:
+            line += f", attempts NOT recorded {recording['attempts_unrecorded']}"
+        if recording["interrupted_runs_marked"]:
+            line += f", marked interrupted: {', '.join(recording['interrupted_runs_marked'])}"
+        lines += ["", line]
     lines += ["", f"Overall: {result.status.upper()}"]
     return "\n".join(lines)

@@ -25,6 +25,7 @@ from industry_intelligence.services.company_resolution import (
     normalize_company_name,
     resolve_company,
 )
+from industry_intelligence.services.ingestion_phase import FETCH, PERSIST, ingestion_phase
 
 logger = logging.getLogger(__name__)
 
@@ -197,10 +198,11 @@ async def ingest_company_ranking(key, settings, session_factory):
         )
     started = perf_counter()
     contact = settings.source_contact if definition.requires_contact else None
-    async with HTTPClient(settings, contact=contact) as http:
-        adapter = definition.adapter(http, definition)
-        snapshot = await adapter.fetch()
-    with session_factory.begin() as session:
+    with ingestion_phase(FETCH):
+        async with HTTPClient(settings, contact=contact) as http:
+            adapter = definition.adapter(http, definition)
+            snapshot = await adapter.fetch()
+    with ingestion_phase(PERSIST), session_factory.begin() as session:
         result = persist_company_snapshot(session, definition, snapshot, adapter.failed_count)
     result["duration_ms"] = round((perf_counter() - started) * 1000)
     logger.info(

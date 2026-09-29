@@ -29,6 +29,7 @@ from industry_intelligence.services.content_linking import (
     build_catalog,
     match_content,
 )
+from industry_intelligence.services.ingestion_phase import FETCH, PERSIST, ingestion_phase
 from industry_intelligence.services.resolution import normalize_url
 
 LOCK_KEY = "content_links"
@@ -229,15 +230,16 @@ def persist_content(session, definition, items, failed_count=0):
 
 async def fetch_content(key, settings):
     definition = CONTENT_SOURCES[key]
-    async with HTTPClient(settings) as http:
-        adapter = definition.adapter(http, settings.source_fetch_limit)
-        items = await adapter.fetch()
+    with ingestion_phase(FETCH):
+        async with HTTPClient(settings) as http:
+            adapter = definition.adapter(http, settings.source_fetch_limit)
+            items = await adapter.fetch()
     return definition, items, adapter.failed_count
 
 
 async def ingest_content(key, settings, session_factory):
     definition, items, failed = await fetch_content(key, settings)
-    with session_factory.begin() as session:
+    with ingestion_phase(PERSIST), session_factory.begin() as session:
         return persist_content(session, definition, items, failed)
 
 

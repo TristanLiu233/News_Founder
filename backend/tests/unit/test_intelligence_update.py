@@ -183,6 +183,7 @@ def test_one_failing_source_does_not_stop_the_others():
     assert stage.sources[1] == {
         "source": "down",
         "error": "HTTPStatusError",
+        "phase": "other",  # raised outside a tagged fetch/persist phase
         "category": "http_status",
         "status_code": 503,
     }
@@ -209,7 +210,7 @@ def test_error_detail_categories_carry_no_message():
     invalid = update.error_detail("s", ValueError("No valid entries"))
     assert invalid["category"] == "invalid_response"
     detail = update.error_detail("s", RuntimeError("token=abc"))
-    assert detail == {"source": "s", "error": "RuntimeError", "category": "error"}
+    assert detail == {"source": "s", "error": "RuntimeError", "phase": "other", "category": "error"}
 
 
 def test_default_sources_exclude_manual_only_rankings_and_explicit_keys_narrow():

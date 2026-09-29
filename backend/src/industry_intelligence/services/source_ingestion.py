@@ -13,6 +13,7 @@ from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.db.models import RankList, RankObservation, Source
 from industry_intelligence.db.models.ingestion_batch import IngestionBatch
 from industry_intelligence.infrastructure.http import HTTPClient
+from industry_intelligence.services.ingestion_phase import FETCH, PERSIST, ingestion_phase
 from industry_intelligence.services.resolution import resolve_subject
 
 logger = logging.getLogger(__name__)
@@ -146,10 +147,11 @@ async def ingest(key, settings, session_factory, batch_key=None):
                 "skipped_count": existing.result["persisted_count"],
                 "replayed": True,
             }
-    async with HTTPClient(settings) as http:
-        adapter = definition.adapter(http, settings.source_fetch_limit)
-        items = await adapter.fetch()
-    with session_factory.begin() as session:
+    with ingestion_phase(FETCH):
+        async with HTTPClient(settings) as http:
+            adapter = definition.adapter(http, settings.source_fetch_limit)
+            items = await adapter.fetch()
+    with ingestion_phase(PERSIST), session_factory.begin() as session:
         result = persist(session, definition, items, batch_key, adapter.failed_count)
     result["duration_ms"] = round((perf_counter() - started) * 1000)
     logger.info(

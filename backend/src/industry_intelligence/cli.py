@@ -55,8 +55,9 @@ def main():
     update.add_argument("--source", action="append", choices=CONTENT_SOURCES)
     update.add_argument("--skip-events", action="store_true")
     intelligence = sub.add_parser("intelligence-update")
-    # The daily run: precheck → rankings → composite → company rankings → content → links →
-    # events → AI (optional) → postcheck. Exit 0 success, 3 degraded, 1 failed.
+    # The daily run, under the global update lock: precheck → rankings → composite → company
+    # rankings → content → links → events → AI (optional) → postcheck. Exit 0 success,
+    # 3 degraded, 1 failed, 4 already running (another run holds the lock; nothing was done).
     intelligence.add_argument("--plan", action="store_true")
     intelligence.add_argument(
         "--source", action="append", choices=[*SOURCES, *COMPANY_RANKINGS, *CONTENT_SOURCES]
@@ -75,6 +76,9 @@ def main():
     gaming_repair = sub.add_parser("gaming-subject-canonical-repair")
     # 3DM game names carrying ranking-row text; dry-run unless --apply is given.
     gaming_repair.add_argument("--apply", action="store_true")
+    health = sub.add_parser("source-health")
+    # Read-only: health of every automatic source from recorded attempts; no network request.
+    health.add_argument("--json", action="store_true")
     audit = sub.add_parser("data-quality-audit")
     # Read-only invariant audit; exits 1 only when an error-level check fails.
     audit.add_argument("--json", action="store_true")
@@ -220,11 +224,28 @@ def main():
             else:
                 print(render_text(report))
             raise SystemExit(0 if report["summary"]["result"]["passed"] else 1)
+        elif args.command == "source-health":
+            from sqlalchemy import text
+
+            from industry_intelligence.services.source_health import render_text, source_health
+
+            session = factory()
+            try:
+                session.execute(text("SET TRANSACTION READ ONLY"))
+                report = source_health(session)
+            finally:
+                session.rollback()
+                session.close()
+            if args.json:
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+            else:
+                print(render_text(report))
+            raise SystemExit(0)
         elif args.command == "intelligence-update":
             from industry_intelligence.services.intelligence_update import (
+                execute_update,
                 plan_update,
                 render_text,
-                run_update,
             )
 
             options = {"sources": args.source, "skip_ai": args.skip_ai, "ai_limit": args.ai_limit}
@@ -232,7 +253,7 @@ def main():
                 plan = asyncio.run(plan_update(settings, factory, **options))
                 print(json.dumps(plan, indent=2, ensure_ascii=False, default=str))
                 raise SystemExit(1 if plan["precheck"]["status"] == "failed" else 0)
-            update = asyncio.run(run_update(settings, factory, run_id=args.run_id, **options))
+            update = asyncio.run(execute_update(settings, factory, run_id=args.run_id, **options))
             if args.json:
                 print(json.dumps(update.to_dict(), indent=2, ensure_ascii=False, default=str))
             else:

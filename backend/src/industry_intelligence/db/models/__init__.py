@@ -17,6 +17,7 @@ from industry_intelligence.db.models.event import (
     EventRetiredId,
     EventSubjectLink,
 )
+from industry_intelligence.db.models.operations import SourceAttempt, UpdateRun
 from industry_intelligence.db.models.rank_list import RankList
 from industry_intelligence.db.models.rank_observation import RankObservation
 from industry_intelligence.db.models.ranking import Ranking
@@ -48,7 +49,9 @@ __all__ = [
     "RankingEntry",
     "RankingSnapshot",
     "Source",
+    "SourceAttempt",
     "Subject",
+    "UpdateRun",
 ]
 
 from industry_intelligence.db.models.canonical import (
