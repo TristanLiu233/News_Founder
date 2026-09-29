@@ -614,19 +614,22 @@ other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a ru
   language, publication time, title, and an excerpt of at most 280 characters. No browsing, no
   outside knowledge, no other Events.
 - Prompts are versioned modules (`ai/prompts/`); a prompt change is a new version, and artifacts
-  of an older version are reported `stale` until regenerated. Summary and Why It Matters have two
-  lineages chosen deterministically from the report languages: primary-locale output (every report
-  in the output language: `event_summary_v4`, `event_why_it_matters_v6`) and cross-language output
-  (`event_summary_xlang_v2`, `event_why_it_matters_xlang_v1`, which add translation rules and
-  repeat the output language in the request). A change in one lineage never makes the other stale.
-  Since AI-X1, cross-language Summaries keep every proper name — people, companies, media,
-  organizations, and government bodies — in the reports' script (places are translated).
+  of an older version are reported `stale` until regenerated.
+- **Language policy (AI-LP1):** Event AI is generated only in the Event's primary locale — the one
+  locale every report is written in (`event_summary_v4`, `event_why_it_matters_v6`): a Chinese
+  Event gets Chinese AI and an English Event English AI, so each Event has at most two tasks. The
+  UI locale never selects the AI language, and nothing is translated. Cross-language generation is
+  discontinued: mixed-language Events get no AI, and `ai-event-enrich --locale` accepts only an
+  Event's primary locale (any other locale is refused before a request or write). The legacy
+  cross-language lineage (`event_summary_xlang_v1`/`v2`, `event_why_it_matters_xlang_v1`) and its
+  guards stay in the code only for historical artifacts, which are kept but never served.
+  Multilingual sources, cross-language aliases and Search, and the bilingual UI are unchanged.
 - Output must match a closed JSON schema, and deterministic guards must pass: every point cites
   refs of this Event only; no investment advice, price targets, ratings, or market predictions; a
   single-source Event is never described as multiple reports; every figure appears in the
   evidence, except a scaled figure exactly equal to an evidence figure in the other notation
-  (4.2亿元 ↔ 420 million, $11.6 billion ↔ 116亿); the text is in the requested locale.
-  Cross-language output is also rejected for a sequence/causal connector ("after which", "as a
+  (4.2亿元 ↔ 420 million, $11.6 billion ↔ 116亿); the text is in the artifact's locale.
+  Legacy cross-language output (no longer generated) was also rejected for a sequence/causal connector ("after which", "as a
   result", 随后, 因此, …) without a signal of the same kind in the reports, and for a Latin ↔
   Chinese name gloss in parentheses unless the reports give both forms. English cross-language
   Summaries (v2) are also rejected for a Latin-script name absent from the reports in an
@@ -635,7 +638,10 @@ other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a ru
   or carries Chinese grammar words. Any failure stores a `failed` artifact (error code only) and
   nothing is displayed.
 - A reviewer hides an artifact that fails the manual audit with `ai-artifact-reject` (the API
-  never serves a rejected artifact). `GET /api/v1/events/{id}/ai` reports each insight as
+  never serves a rejected artifact). `GET /api/v1/events/{id}/ai` returns the Event's
+  `primary_locale` (null for a mixed-language Event), primary-only `coverage` (`required`,
+  `available`, `complete`), and each insight in that locale; the optional `locale` parameter is
+  the UI locale, echoed back and never used to pick content. It reports each insight as
   `available`, `not_generated`, `failed`, `rejected` (withdrawn after review), or `stale` (older
   reports or an older prompt version); only `available` carries text. Page requests never call a
   provider. An isolated wording defect may be regenerated once; a
@@ -645,8 +651,8 @@ other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a ru
   and an `input_hash` over prompt version, locale, and the exact evidence. A matching valid
   artifact is a replay (no request, no cost). When an Event's reports change, the API reports the
   old artifact as `stale` immediately and the next batch marks it and generates a new version.
-- AI Summary: 1–4 factual points in English or Simplified Chinese (one artifact per locale; raw
-  titles and names stay in their original language). Why It Matters: 0–3 descriptive
+- AI Summary: 1–4 factual points in the Event's primary language, English or Simplified Chinese
+  (raw titles and names stay in their original language). Why It Matters: 0–3 descriptive
   business/technology/industry/product/regulatory points, or an explicit "not enough context"
   answer — never predictions or advice.
 
@@ -654,8 +660,9 @@ other errors fail immediately. `AI_REQUEST_INTERVAL` spaces requests within a ru
 cd backend
 # Preview: candidate Events, cached, stale, and estimated requests — sends nothing, writes nothing
 python -m industry_intelligence.cli ai-event-enrich --limit 10 --dry-run
-# Bounded run (default 10 Events, max 100); repeat --event-id / --locale / --type to narrow
-python -m industry_intelligence.cli ai-event-enrich --event-id <uuid> --locale zh-CN
+# Bounded run (default 10 Events, max 100; at most 2 requests per Event); repeat --event-id /
+# --type to narrow. --locale may only confirm an Event's primary locale.
+python -m industry_intelligence.cli ai-event-enrich --event-id <uuid>
 # Hide an inaccurate artifact after review
 python -m industry_intelligence.cli ai-artifact-reject <artifact-uuid> --reason "evidence says otherwise"
 ```
@@ -704,8 +711,9 @@ request. A bounded 5-Event AI catch-up (22 requests) then verified the live AI p
 fail-closed serving but rejected every cross-language (Chinese → English) Summary; AI-X1 repaired
 that lineage (`event_summary_xlang_v2`), and the same five Summaries then passed review (5
 requests). Refreshing the four Summaries made stale by that change (AI-X1.1) served two and
-left two unavailable (fail closed); English → Chinese output is not yet validated, so daily updates
-keep `--skip-ai`.
+left two unavailable (fail closed). AI-LP1 then made Event AI primary-locale only (cross-language
+generation discontinued): a daily AI stage with `--ai-limit N` sends at most 2 × N provider
+requests. Bounded daily AI is a separate owner decision; runs keep `--skip-ai` until then.
 
 `intelligence-update` is one explicit CLI process that runs the existing services in dependency
 order. It adds no queue, scheduler, or new intelligence logic, and it never runs migrations,
