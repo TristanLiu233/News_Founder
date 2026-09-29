@@ -90,6 +90,13 @@ python -m industry_intelligence.cli subject-identity-repair
 python -m industry_intelligence.cli subject-identity-repair --apply  # approval required
 ```
 
+The DQ-2.1 3DM game-name repair is dry-run-first; `--apply` refuses when any candidate needs review:
+
+```bash
+python -m industry_intelligence.cli gaming-subject-canonical-repair
+python -m industry_intelligence.cli gaming-subject-canonical-repair --apply  # approval required
+```
+
 The DQ-2 invariant audit is read-only (it never repairs) and exits 1 only on error-level findings:
 
 ```bash

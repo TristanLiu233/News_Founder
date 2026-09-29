@@ -174,23 +174,52 @@ def parse_17173(html):
     return rows, failed
 
 
+# A 3DM row link holds <i class="i1"> rank, <i class="i2"> game name, <i class="i3"> genre,
+# test status, or open-beta date (sometimes empty), then an .infor block with 运营商：, 公测时间：
+# and the score. The name comes from i2; flattened row text (older markup, stored history) is
+# cut at the labelled metadata boundary instead.
+_3DM_METADATA = re.compile(r"\s+(?:运营商|公测时间)[：:]")
+_3DM_SLOT = re.compile(
+    r"\s+(?:动作|MOBA|射击|角色扮演|策略|卡牌|竞速|体育|冒险|休闲|内测|公测|不删档测试|限量测试|不限号"
+    r"|\d{4}-\d{1,2}-\d{1,2})$",
+    re.IGNORECASE,
+)
+
+
+def is_3dm_row_text(text):
+    """True for flattened 3DM row text that still carries the labelled metadata block."""
+
+    return bool(_3DM_METADATA.search(" " + " ".join(text.split())))
+
+
+def clean_3dm_row_text(text):
+    """Game name from flattened row text: '8 剑网3 角色扮演 运营商：… 8.9 分' → '剑网3'."""
+
+    title = " ".join(text.split())
+    title = re.sub(r"^\d+\s+", "", title)
+    title = _3DM_METADATA.split(" " + title, maxsplit=1)[0].strip()
+    return _3DM_SLOT.sub("", title).strip()
+
+
 def parse_3dm(html):
     soup = BeautifulSoup(html, "html.parser")
     heading = soup.find(string=lambda value: value and "网络游戏排行榜" in value)
     container = heading.find_parent("div") if heading else None
     scope = container.parent if container else soup
     links = scope.select('a[href*="ol.3dmgame.com/"]')
-    rows, seen = [], set()
+    rows, seen, failed = [], set(), 0
     for link in links:
-        title = link.get_text(" ", strip=True)
         slug = link["href"].rstrip("/").rsplit("/", 1)[-1]
-        title = re.sub(r"^\d+\s+", "", title)
-        title = re.split(
-            r"\s+(?:动作|MOBA|射击|角色扮演|策略|卡牌|竞速|体育|冒险|休闲|内测|公测|限量测试|不限号)\b",
-            title,
-            maxsplit=1,
-        )[0]
-        if not title or slug in seen:
+        if slug in seen:
+            continue
+        name = link.select_one("i.i2")
+        title = (
+            " ".join(name.get_text(" ", strip=True).split())
+            if name
+            else clean_3dm_row_text(link.get_text(" ", strip=True))
+        )
+        if not title:
+            failed += 1
             continue
         seen.add(slug)
         rows.append(
@@ -207,7 +236,7 @@ def parse_3dm(html):
             break
     if not rows:
         raise ValueError("Unexpected 3DM ranking structure")
-    return rows, 0
+    return rows, failed
 
 
 def parse_gamersky(html):

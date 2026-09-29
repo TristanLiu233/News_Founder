@@ -88,6 +88,44 @@ def seeded_canonical(value):
     return value, (value,)
 
 
+def is_polluted_title(value):
+    """Scraped row text stored as a name: over-long, or carrying 3DM's operator label."""
+
+    return len(value) > 80 or "运营商：" in value or "运营商:" in value
+
+
+def heal_polluted_title(session, subject, incoming):
+    """Replace a polluted title found by exact external ID, keeping canonical_name in step.
+
+    The incoming title must itself be clean. canonical_name follows the new title only when it
+    was derived from polluted text (polluted itself or the old title's normal form); a
+    deliberate canonical name, or a target held by any other Subject row (redirected ones
+    included, as they keep the unique key), leaves both fields unchanged: never a merge.
+    Returns True when the Subject changed.
+    """
+
+    if not is_polluted_title(subject.title) or is_polluted_title(incoming) or not incoming:
+        return False
+    target = normalize_subject_name(incoming)
+    if subject.canonical_name != target:
+        derived = is_polluted_title(subject.canonical_name) or (
+            subject.canonical_name == normalize_subject_name(subject.title)
+        )
+        occupied = session.scalar(
+            select(Subject.id).where(
+                Subject.domain == subject.domain,
+                Subject.subject_type == subject.subject_type,
+                Subject.canonical_name == target,
+                Subject.id != subject.id,
+            )
+        )
+        if not derived or occupied is not None:
+            return False
+    subject.title = incoming
+    subject.canonical_name = target
+    return True
+
+
 @dataclass(frozen=True)
 class ResolutionResult:
     subject: Subject
@@ -127,8 +165,7 @@ def resolve_subject(session, definition, source, item):
                 identity.resolution_strategy = "exact_canonical_id"
                 identity.confidence = 1.0
         subject = session.get(Subject, identity.subject_id)
-        if (len(subject.title) > 80 or "运营商：" in subject.title) and len(item.title) <= 80:
-            subject.title = item.title
+        heal_polluted_title(session, subject, item.title)
         return ResolutionResult(subject, "exact_external_id", 1.0)
     normalized = normalize_subject_name(item.title)
     canonical_url = normalize_url(item.url)

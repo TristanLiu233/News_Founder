@@ -61,6 +61,9 @@ def main():
     identity_repair = sub.add_parser("subject-identity-repair")
     # Safe by default: writes require the explicit --apply acknowledgement.
     identity_repair.add_argument("--apply", action="store_true")
+    gaming_repair = sub.add_parser("gaming-subject-canonical-repair")
+    # 3DM game names carrying ranking-row text; dry-run unless --apply is given.
+    gaming_repair.add_argument("--apply", action="store_true")
     audit = sub.add_parser("data-quality-audit")
     # Read-only invariant audit; exits 1 only when an error-level check fails.
     audit.add_argument("--json", action="store_true")
@@ -168,6 +171,21 @@ def main():
                 if not args.apply:
                     session.execute(text("SET TRANSACTION READ ONLY"))
                 result = repair_subject_identities(session, dry_run=not args.apply)
+                session.commit() if args.apply else session.rollback()
+            finally:
+                session.close()
+        elif args.command == "gaming-subject-canonical-repair":
+            from sqlalchemy import text
+
+            from industry_intelligence.services.gaming_subject_repair import (
+                repair_gaming_subjects,
+            )
+
+            session = factory()
+            try:
+                if not args.apply:
+                    session.execute(text("SET TRANSACTION READ ONLY"))
+                result = repair_gaming_subjects(session, dry_run=not args.apply)
                 session.commit() if args.apply else session.rollback()
             finally:
                 session.close()
