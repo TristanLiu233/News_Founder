@@ -61,6 +61,9 @@ def main():
     identity_repair = sub.add_parser("subject-identity-repair")
     # Safe by default: writes require the explicit --apply acknowledgement.
     identity_repair.add_argument("--apply", action="store_true")
+    audit = sub.add_parser("data-quality-audit")
+    # Read-only invariant audit; exits 1 only when an error-level check fails.
+    audit.add_argument("--json", action="store_true")
     reindex_parser = sub.add_parser("search-reindex")
     reindex_parser.add_argument("--subject-id", type=UUID)
     sub.add_parser("search-embed")
@@ -168,6 +171,26 @@ def main():
                 session.commit() if args.apply else session.rollback()
             finally:
                 session.close()
+        elif args.command == "data-quality-audit":
+            from sqlalchemy import text
+
+            from industry_intelligence.services.data_quality_audit import (
+                audit_data_quality,
+                render_text,
+            )
+
+            session = factory()
+            try:
+                session.execute(text("SET TRANSACTION READ ONLY"))
+                report = audit_data_quality(session)
+            finally:
+                session.rollback()
+                session.close()
+            if args.json:
+                print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+            else:
+                print(render_text(report))
+            raise SystemExit(0 if report["summary"]["result"]["passed"] else 1)
         elif args.command in {"rank", "rank-all"}:
             domains = [Domain(args.domain)] if args.command == "rank" else list(Domain)
             result = []

@@ -90,6 +90,13 @@ python -m industry_intelligence.cli subject-identity-repair
 python -m industry_intelligence.cli subject-identity-repair --apply  # approval required
 ```
 
+The DQ-2 invariant audit is read-only (it never repairs) and exits 1 only on error-level findings:
+
+```bash
+python -m industry_intelligence.cli data-quality-audit
+python -m industry_intelligence.cli data-quality-audit --json
+```
+
 Single-source and single-domain commands include:
 
 ```bash

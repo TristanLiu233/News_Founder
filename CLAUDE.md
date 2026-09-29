@@ -36,6 +36,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # backend/ — bounded rebuild of derived Events for content published in [from, to)
 ../.venv/bin/python -m industry_intelligence.cli event-rebuild --from 2026-09-20T00:00Z --to 2026-09-29T00:00Z --dry-run
 
+# backend/ — read-only data-quality invariant audit (exit 1 only on error-level findings)
+../.venv/bin/python -m industry_intelligence.cli data-quality-audit --json
+
 # backend/ — external company rankings (current published versions only)
 ../.venv/bin/python -m industry_intelligence.cli company-ranking-ingest cmc_tech_market_cap
 ../.venv/bin/python -m industry_intelligence.cli company-ranking-ingest-all
