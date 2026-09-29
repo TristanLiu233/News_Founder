@@ -703,7 +703,9 @@ Events 345 → 520 with every earlier Event unchanged, audit 0 errors / 0 warnin
 request. A bounded 5-Event AI catch-up (22 requests) then verified the live AI path and
 fail-closed serving but rejected every cross-language (Chinese → English) Summary; AI-X1 repaired
 that lineage (`event_summary_xlang_v2`), and the same five Summaries then passed review (5
-requests). Wider AI use remains an owner decision.
+requests). Refreshing the four Summaries made stale by that change (AI-X1.1) served two and
+left two unavailable (fail closed); English → Chinese output is not yet validated, so daily updates
+keep `--skip-ai`.
 
 `intelligence-update` is one explicit CLI process that runs the existing services in dependency
 order. It adds no queue, scheduler, or new intelligence logic, and it never runs migrations,
