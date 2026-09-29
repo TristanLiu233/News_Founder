@@ -694,7 +694,9 @@ Status (2026-09-29): **complete; validated with the first full multi-source live
 a verified backup, a bounded `--source gematsu --skip-ai` smoke and then one full
 `intelligence-update --skip-ai` run succeeded (exit 0): 25/25 sources, ContentItems 366 → 543,
 Events 345 → 520 with every earlier Event unchanged, audit 0 errors / 0 warnings, and no AI
-request. AI catch-up (40 requests for the default 10 Events) awaits approval.
+request. A bounded 5-Event AI catch-up (22 requests) then verified the live AI path and
+fail-closed serving, but every cross-language (Chinese → English) Summary failed review, so that
+lineage needs repair before AI scales; run daily updates with `--skip-ai` meanwhile.
 
 `intelligence-update` is one explicit CLI process that runs the existing services in dependency
 order. It adds no queue, scheduler, or new intelligence logic, and it never runs migrations,
