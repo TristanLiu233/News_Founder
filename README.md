@@ -690,9 +690,10 @@ and manually audited primary-locale output for 17 Events and a 6-Event bilingual
 
 ## Operations-1 — Daily intelligence update
 
-Status (2026-09-29): **implementation ready; bounded live smoke pending owner approval.** The
-command is implemented and tested on the isolated test database; it has not yet been run against
-the development database except with `--plan` (read-only).
+Status (2026-09-29): **complete; bounded live smoke passed.** After a verified backup,
+`intelligence-update --source gematsu --skip-ai` ran once against the development database:
+SUCCESS (exit 0), 10 new Gematsu items and 10 new Events, audit 0 errors / 0 warnings before and
+after, and no other canonical change. A full multi-source live run has not been executed yet.
 
 `intelligence-update` is one explicit CLI process that runs the existing services in dependency
 order. It adds no queue, scheduler, or new intelligence logic, and it never runs migrations,
