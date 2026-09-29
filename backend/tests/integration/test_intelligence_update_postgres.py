@@ -245,7 +245,9 @@ def test_full_run_orders_stages_isolates_a_failing_source_and_degrades(
     assert stage["events"].counts["created_events"] == 1
     assert stage["events"].counts["event_subject_links"] == 1
     assert stage["events"].counts["retired_ids_registered"] == 0
-    assert stage["ai"].counts["generated"] == 4 and len(provider.calls) == 4
+    assert stage["ai"].counts["generated"] == 2 and len(provider.calls) == 2
+    # AI-LP1: primary locale only (the synthetic report is English), no cross-language task.
+    assert {a.locale for a in db.scalars(select(AIArtifact))} == {"en"}
     assert stage["postcheck"].status == SUCCESS and stage["postcheck"].counts["audit_errors"] == 0
     assert (result.status, result.exit_code) == (DEGRADED, 3)
     assert result.deltas["content_items"] == 1 and result.deltas["events"] == 1
@@ -271,7 +273,7 @@ def test_repeated_run_is_idempotent_and_replays_cached_ai(db, factory, settings,
     assert stage["links"].counts["content_links_added"] == 0
     assert stage["links"].counts["content_links_removed"] == 0
     assert stage["events"].counts["processed"] == 0
-    assert stage["ai"].counts["cached"] == 4 and stage["ai"].counts["requests"] == 0
+    assert stage["ai"].counts["cached"] == 2 and stage["ai"].counts["requests"] == 0
     assert provider.calls == []
     assert snapshot(db) == before and set(db.scalars(select(Event.id))) == event_ids
     assert all(delta == 0 for delta in again.deltas.values())
@@ -325,7 +327,7 @@ def test_event_failure_keeps_ingested_content_and_a_rerun_recovers(
     stage = {s.name: s for s in recovered.stages}
     assert stage["content"].counts["persisted_count"] == 0
     assert stage["events"].counts["processed"] == 1 and recovered.deltas["events"] == 1
-    assert stage["ai"].counts["generated"] == 4
+    assert stage["ai"].counts["generated"] == 2
 
 
 def test_ai_provider_failure_keeps_canonical_updates_and_degrades(db, factory, settings, registry):
@@ -335,14 +337,14 @@ def test_ai_provider_failure_keeps_canonical_updates_and_degrades(db, factory, s
     result = update(settings, factory, provider=FixtureProvider(rate_limited))
     stage = {s.name: s for s in result.stages}
     assert stage["events"].status == SUCCESS and result.deltas["events"] == 1
-    assert stage["ai"].status == DEGRADED and stage["ai"].counts["failed"] == 4
-    assert stage["ai"].errors == [{"error": "rate_limited", "count": 4}]
+    assert stage["ai"].status == DEGRADED and stage["ai"].counts["failed"] == 2
+    assert stage["ai"].errors == [{"error": "rate_limited", "count": 2}]
     assert result.status == DEGRADED
     # Transient failures are retried by the next run; the canonical data stays.
     retry = FixtureProvider(insight_responder)
     again = update(settings, factory, provider=retry, run_id="run-e")
-    assert {s.name: s for s in again.stages}["ai"].counts["generated"] == 4
-    assert len(retry.calls) == 4
+    assert {s.name: s for s in again.stages}["ai"].counts["generated"] == 2
+    assert len(retry.calls) == 2
 
 
 def test_non_transient_failures_are_not_regenerated_unattended(db, factory, settings, registry):
@@ -350,12 +352,12 @@ def test_non_transient_failures_are_not_regenerated_unattended(db, factory, sett
         return {"points": [{"text": "Wrong.", "evidence": ["C9"]}], "insufficient_evidence": False}
 
     update(settings, factory, provider=FixtureProvider(bad_evidence), run_id="run-f")
-    assert count(db, AIArtifact, AIArtifact.error_code == "validation_failed") == 4
+    assert count(db, AIArtifact, AIArtifact.error_code == "validation_failed") == 2
     provider = FixtureProvider(insight_responder)
     again = update(settings, factory, provider=provider, run_id="run-f")
     ai = again.stage("ai")
     # Paid, checked answers that failed validation wait for an explicit ``ai-event-enrich``.
-    assert ai.counts["skipped_failed"] == 4 and ai.counts["tasks"] == 0
+    assert ai.counts["skipped_failed"] == 2 and ai.counts["tasks"] == 0
     assert provider.calls == [] and again.status == DEGRADED
 
 
@@ -371,7 +373,7 @@ def test_reviewer_rejection_is_never_regenerated_unattended(db, factory, setting
     provider = FixtureProvider(insight_responder)
     again = update(settings, factory, provider=provider, run_id="run-g")
     ai = again.stage("ai")
-    assert ai.counts["skipped_rejected"] == 1 and ai.counts["cached"] == 3
+    assert ai.counts["skipped_rejected"] == 1 and ai.counts["cached"] == 1
     assert provider.calls == [] and again.status == DEGRADED
     assert db.get(AIArtifact, summary.id).status == "rejected"
 

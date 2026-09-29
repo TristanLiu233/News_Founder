@@ -1,13 +1,18 @@
 """Bounded, cached, incremental AI enrichment of Events (CLI-only; never on a page request).
 
-For each selected Event, artifact type, and locale the prompt is chosen by the deterministic
-generation mode (primary-locale or cross-language lineage) and the evidence hash is computed
-from persisted data. A ``valid`` artifact with the same hash, provider, and model is a replay (no
-request); older ``valid`` artifacts of the same Event/type/locale with a different hash are marked
-``stale``. Otherwise one provider request is made, the output is validated
-(``ai_evidence.validate_output``), and exactly one row is written: ``valid`` with the output, or
-``failed`` with a short error code (no output kept). Every task commits on its own, so one
-failure never rolls back another Event's artifacts.
+AI-LP1 language policy: Event AI is generated only in the Event's primary locale
+(``ai_evidence.primary_locale``: the one locale every report is written in) with the primary
+prompts, so each Event has at most two tasks (Summary and Why It Matters). Cross-language
+generation is discontinued: an explicit request for another locale is refused before any
+request or write, and mixed-language Events are skipped. The legacy cross-language prompts stay
+in ``event_insights`` only for their historical artifacts.
+
+For each task the evidence hash is computed from persisted data. A ``valid`` artifact with the
+same hash, provider, and model is a replay (no request); older ``valid`` artifacts of the same
+Event/type/locale with a different hash are marked ``stale``. Otherwise one provider request is
+made, the output is validated (``ai_evidence.validate_output``), and exactly one row is written:
+``valid`` with the output, or ``failed`` with a short error code (no output kept). Every task
+commits on its own, so one failure never rolls back another Event's artifacts.
 """
 
 from __future__ import annotations
@@ -19,14 +24,14 @@ from uuid import uuid4
 from sqlalchemy import select, update
 
 from industry_intelligence.ai.prompts import LANGUAGE_NAMES
-from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS, insight_spec
+from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS
 from industry_intelligence.ai.provider import AIProviderError, generate_with_retry
 from industry_intelligence.ai.providers import build_provider
 from industry_intelligence.db.models import AIArtifact, Event, EventRedirect
 from industry_intelligence.services.ai_evidence import (
-    generation_mode,
     input_hash,
     load_event_evidence,
+    primary_locale,
     ref_map,
     render_event,
     render_user_message,
@@ -35,7 +40,6 @@ from industry_intelligence.services.ai_evidence import (
 from industry_intelligence.services.events import resolve_event_redirect
 
 ENTITY_EVENT = "event"
-LOCALES = ("en", "zh-CN")
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 100
 # Failures that a later run may retry without a reviewer: the provider never produced a checked
@@ -44,6 +48,18 @@ MAX_LIMIT = 100
 TRANSIENT_ERRORS = frozenset(
     {"timeout", "rate_limited", "server_error", "request_rejected", "not_configured"}
 )
+
+
+class CrossLanguageGenerationDisabled(ValueError):
+    """An explicit locale that is not an Event's primary locale (AI-LP1 product policy)."""
+
+    def __init__(self, refused):
+        self.refused = refused
+        super().__init__(
+            "Cross-language AI generation is disabled by product policy: Event AI is generated "
+            "only in each Event's primary locale (omit --locale). Refused: "
+            + ", ".join(f"{row['event_id']} {row['locale']}" for row in refused)
+        )
 
 
 def system_prompt(spec, locale):
@@ -205,57 +221,87 @@ def _settled_attempt(session, event_key, spec, locale, digest):
     return None
 
 
+def _task_locale(event, evidence, locales):
+    """The one locale an Event's AI is generated in (its primary locale), or None to skip it.
+
+    ``locales`` None is the normal policy. An explicit ``locales`` may only name the Event's
+    primary locale; anything else is a cross-language request and is returned as refused.
+    """
+
+    primary = primary_locale(evidence)
+    if locales is None:
+        return primary, []
+    refused = [
+        {"event_id": str(event.id), "locale": locale, "primary_locale": primary}
+        for locale in locales
+        if locale != primary
+    ]
+    return (primary if primary in locales else None), refused
+
+
 def _plan(session, events, artifact_types, locales, provider, skip_settled=False):
-    tasks, counts = [], Counter()
+    """Plan the primary-locale tasks; raises ``CrossLanguageGenerationDisabled`` (before any
+    request or write) when ``locales`` names a non-primary locale of a selected Event."""
+
+    tasks, counts, planned, refused = [], Counter(), [], []
     for event in events:
         evidence = load_event_evidence(session, event.id)
         if evidence is None or not evidence.items:
             continue
+        locale, rejected = _task_locale(event, evidence, locales)
+        refused.extend(rejected)
+        if locale is None:
+            if primary_locale(evidence) is None:
+                counts["skipped_no_primary_locale"] += 1
+            continue
+        planned.append((event, evidence, locale))
+    if refused:
+        raise CrossLanguageGenerationDisabled(refused)
+    for event, evidence, locale in planned:
         for artifact_type in artifact_types:
-            for locale in locales:
-                spec = insight_spec(artifact_type, generation_mode(evidence, locale))
-                digest = input_hash(spec.version, locale, evidence)
-                cached = find_cached(
-                    session,
-                    ENTITY_EVENT,
-                    str(event.id),
-                    spec,
-                    locale,
-                    digest,
-                    provider.name if provider else None,
-                    provider.model if provider else None,
+            spec = INSIGHT_PROMPTS[artifact_type]
+            digest = input_hash(spec.version, locale, evidence)
+            cached = find_cached(
+                session,
+                ENTITY_EVENT,
+                str(event.id),
+                spec,
+                locale,
+                digest,
+                provider.name if provider else None,
+                provider.model if provider else None,
+            )
+            stale = session.scalar(
+                select(AIArtifact.id)
+                .where(
+                    AIArtifact.entity_type == ENTITY_EVENT,
+                    AIArtifact.entity_key == str(event.id),
+                    AIArtifact.artifact_type == artifact_type,
+                    AIArtifact.locale == locale,
+                    AIArtifact.status == "valid",
+                    AIArtifact.input_hash != digest,
                 )
-                stale = session.scalar(
-                    select(AIArtifact.id)
-                    .where(
-                        AIArtifact.entity_type == ENTITY_EVENT,
-                        AIArtifact.entity_key == str(event.id),
-                        AIArtifact.artifact_type == artifact_type,
-                        AIArtifact.locale == locale,
-                        AIArtifact.status == "valid",
-                        AIArtifact.input_hash != digest,
-                    )
-                    .limit(1)
-                )
-                if not cached and skip_settled:
-                    settled = _settled_attempt(session, str(event.id), spec, locale, digest)
-                    if settled:
-                        counts[f"skipped_{settled}"] += 1
-                        continue
-                if stale:
-                    counts["stale"] += 1
-                counts["cached" if cached else "would_generate"] += 1
-                tasks.append(
-                    {
-                        "event": event,
-                        "evidence": evidence,
-                        "spec": spec,
-                        "locale": locale,
-                        "digest": digest,
-                        "cached": cached is not None,
-                        "stale": stale is not None,
-                    }
-                )
+                .limit(1)
+            )
+            if not cached and skip_settled:
+                settled = _settled_attempt(session, str(event.id), spec, locale, digest)
+                if settled:
+                    counts[f"skipped_{settled}"] += 1
+                    continue
+            if stale:
+                counts["stale"] += 1
+            counts["cached" if cached else "would_generate"] += 1
+            tasks.append(
+                {
+                    "event": event,
+                    "evidence": evidence,
+                    "spec": spec,
+                    "locale": locale,
+                    "digest": digest,
+                    "cached": cached is not None,
+                    "stale": stale is not None,
+                }
+            )
     return tasks, counts
 
 
@@ -267,6 +313,7 @@ def _event_row(event, evidence):
         "content_count": evidence.content_count,
         "source_count": evidence.source_count,
         "languages": sorted({item.language for item in evidence.items}),
+        "primary_locale": primary_locale(evidence),
     }
 
 
@@ -278,7 +325,7 @@ async def enrich_events(
     since=None,
     domain=None,
     limit=DEFAULT_LIMIT,
-    locales=LOCALES,
+    locales=None,
     artifact_types=tuple(INSIGHT_PROMPTS),
     dry_run=False,
     provider=None,
@@ -286,6 +333,10 @@ async def enrich_events(
     skip_settled=False,
 ):
     """Generate missing Event insight artifacts; ``dry_run`` sends no request and writes nothing.
+
+    Every task is in the Event's primary locale (at most two tasks per Event). ``locales`` is
+    only an explicit confirmation of that locale: naming any other locale for a selected Event
+    raises ``CrossLanguageGenerationDisabled`` before any request or write.
 
     ``skip_settled`` (the unattended ``intelligence-update`` stage) leaves a task alone when the
     latest attempt for its current evidence was rejected by a reviewer or failed non-transiently;
@@ -313,6 +364,7 @@ async def enrich_events(
         "stale": counts["stale"],
         "would_generate": counts["would_generate"],
         "estimated_requests": counts["would_generate"],
+        "skipped_no_primary_locale": counts["skipped_no_primary_locale"],
     }
     if skip_settled:
         result["skipped_rejected"] = counts["skipped_rejected"]

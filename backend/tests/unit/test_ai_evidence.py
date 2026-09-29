@@ -34,6 +34,7 @@ from industry_intelligence.services.ai_evidence import (
     EvidenceItem,
     generation_mode,
     input_hash,
+    primary_locale,
     ref_map,
     render_event,
     validate_output,
@@ -204,6 +205,26 @@ def test_cross_language_prompts_keep_names_hedges_and_output_language():
 def test_generation_mode_follows_report_languages(languages, locale, mode):
     ev = evidence(*(item("Studio A", language=language) for language in languages))
     assert generation_mode(ev, locale) == mode
+
+
+@pytest.mark.parametrize(
+    ("languages", "expected"),
+    [
+        (["zh-CN"], "zh-CN"),
+        (["zh-CN", "zh"], "zh-CN"),
+        (["en"], "en"),
+        (["en", "en-US"], "en"),
+        (["en", "zh-CN"], None),
+        (["ja"], None),
+        ([], None),
+    ],
+)
+def test_primary_locale_is_the_one_locale_of_every_report(languages, expected):
+    # AI-LP1: the single AI generation locale; consistent with the ``primary`` generation mode.
+    ev = evidence(*(item("Studio A", language=language) for language in languages))
+    assert primary_locale(ev) == expected
+    for locale in ("en", "zh-CN"):
+        assert (generation_mode(ev, locale) == PRIMARY) == (locale == expected)
 
 
 def test_only_cross_language_requests_carry_the_output_language():

@@ -155,7 +155,13 @@ Do not add sequence words such as earlier, later, before, after, following, subs
 INSIGHT_PROMPTS = {spec.artifact_type: spec for spec in (EVENT_SUMMARY_V4, EVENT_WHY_IT_MATTERS_V6)}
 
 
-# --- Cross-language lineage (Phase 7.1 Checkpoint E) -------------------------------------------
+# --- Cross-language lineage (Phase 7.1 Checkpoint E) — LEGACY, generation disabled -------------
+# AI-LP1: cross-language AI generation is discontinued; Event AI is generated and served only
+# in the Event's primary locale with ``INSIGHT_PROMPTS``. This lineage (prompts and the
+# ``ai_evidence`` cross-language / English-output guards) is retained only so historical
+# artifacts stay reproducible and auditable; neither ``enrich_events`` nor the read model
+# selects it.
+#
 # Output in a language other than the reports' uses its own prompt versions, so translation
 # rules never change the primary-locale prompts above (whose artifacts were audited in
 # Checkpoint D) and a change here never makes primary-locale artifacts stale. The xlang prompts
@@ -300,7 +306,10 @@ CROSS_LANGUAGE_PROMPTS = {
 
 
 def insight_spec(artifact_type, mode):
-    """The prompt of one insight type for a generation mode (``primary`` or ``cross_language``)."""
+    """The prompt of one insight type for a generation mode (``primary`` or ``cross_language``).
+
+    Legacy lookup for historical artifacts; new generation uses ``INSIGHT_PROMPTS`` only (AI-LP1).
+    """
 
     prompts = CROSS_LANGUAGE_PROMPTS if mode == CROSS_LANGUAGE else INSIGHT_PROMPTS
     return prompts[artifact_type]

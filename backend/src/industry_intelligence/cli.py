@@ -338,7 +338,10 @@ def main():
                 result = merge_events(session, args.canonical, args.duplicate, args.reason)
         elif args.command in {"ai-event-enrich", "ai-entity-suggest", "ai-merge-suggest"}:
             from industry_intelligence.ai.provider import AIProviderNotConfigured
-            from industry_intelligence.services.ai_enrichment import LOCALES, enrich_events
+            from industry_intelligence.services.ai_enrichment import (
+                CrossLanguageGenerationDisabled,
+                enrich_events,
+            )
             from industry_intelligence.services.ai_suggestions import (
                 suggest_entities,
                 suggest_event_merges,
@@ -356,7 +359,7 @@ def main():
                         settings,
                         factory,
                         event_ids=args.event_id,
-                        locales=tuple(args.locale or LOCALES),
+                        locales=tuple(args.locale) if args.locale else None,
                         artifact_types=tuple(
                             args.type or ("event_summary", "event_why_it_matters")
                         ),
@@ -369,6 +372,18 @@ def main():
                 result = asyncio.run(run)
             except AIProviderNotConfigured as exc:
                 print(json.dumps({"error": "ai_provider_not_configured", "detail": str(exc)}))
+                raise SystemExit(1) from exc
+            except CrossLanguageGenerationDisabled as exc:
+                print(
+                    json.dumps(
+                        {
+                            "error": "cross_language_generation_disabled",
+                            "detail": str(exc),
+                            "refused": exc.refused,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
                 raise SystemExit(1) from exc
         elif args.command in {
             "ai-suggestion-list",

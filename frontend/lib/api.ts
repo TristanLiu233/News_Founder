@@ -481,12 +481,19 @@ export interface AIInsightArtifact {
   prompt_version: string; generated_at: string; insufficient_evidence: boolean; points: AIInsightPoint[];
 }
 export interface AIInsight { state: AIInsightState; artifact: AIInsightArtifact | null; error_code?: string | null; }
+/**
+ * AI-LP1: insights are always in the Event's `primary_locale` (null for a mixed-language Event,
+ * which has no AI); the UI locale never selects the content language. `coverage` counts only
+ * the two primary insights.
+ */
 export interface EventAI {
-  event_id: string; requested_id: string; redirected: boolean; locale: "en" | "zh-CN";
+  event_id: string; requested_id: string; redirected: boolean; locale: "en" | "zh-CN" | null;
+  primary_locale: "en" | "zh-CN" | null;
   ai_generated: true; content_count: number; source_count: number; single_source: boolean;
+  coverage: { required: number; available: number; complete: boolean };
   insights: Record<AIInsightType, AIInsight>;
 }
 
-export function fetchEventAi(id: string, locale: "en" | "zh-CN", signal?: AbortSignal): Promise<EventAI> {
-  return getJson(`/api/v1/events/${encodeURIComponent(id)}/ai`, {locale}, signal);
+export function fetchEventAi(id: string, signal?: AbortSignal): Promise<EventAI> {
+  return getJson(`/api/v1/events/${encodeURIComponent(id)}/ai`, {}, signal);
 }

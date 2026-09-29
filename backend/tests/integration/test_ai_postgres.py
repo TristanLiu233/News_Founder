@@ -180,27 +180,44 @@ def artifacts(db, event_id, **filters):
 # --- enrichment, cache, locale, staleness --------------------------------------------------
 
 
-def test_enrichment_generates_validated_artifacts_per_type_and_locale(
-    db, factory, settings, sources, tag
-):
-    event, item = make_event(db, sources[0], f"Studio {tag} announces new game")
+def test_enrichment_generates_only_primary_locale_tasks(db, factory, settings, sources, tag):
+    # AI-LP1: each Event gets its Summary and Why It Matters in its primary locale only; an
+    # English Event stays English and a Chinese Event stays Chinese (no cross-language task).
+    english, en_item = make_event(db, sources[0], f"Studio {tag} announces new game")
+    chinese, _ = make_event(
+        db, sources[2], f"工作室{tag}公布新作", language="zh-CN", at=T0 + timedelta(days=3)
+    )
     provider = FixtureProvider(insight_responder)
-    result = run(enrich_events(settings, factory, event_ids=[event.id], provider=provider))
+    result = run(
+        enrich_events(settings, factory, event_ids=[english.id, chinese.id], provider=provider)
+    )
     assert result["requests"] == 4 and result["generated"] == 4 and result["failed"] == 0
-    rows = artifacts(db, event.id, status="valid")
-    assert {(a.artifact_type, a.locale) for a in rows} == {
-        ("event_summary", "en"),
-        ("event_summary", "zh-CN"),
-        ("event_why_it_matters", "en"),
-        ("event_why_it_matters", "zh-CN"),
+    assert {row["event_id"]: row["primary_locale"] for row in result["events"]} == {
+        str(english.id): "en",
+        str(chinese.id): "zh-CN",
     }
-    summary = next(a for a in rows if a.artifact_type == "event_summary" and a.locale == "en")
+    for event, locale in ((english, "en"), (chinese, "zh-CN")):
+        rows = artifacts(db, event.id)
+        assert {(a.artifact_type, a.locale, a.status) for a in rows} == {
+            ("event_summary", locale, "valid"),
+            ("event_why_it_matters", locale, "valid"),
+        }
+        assert {a.prompt_version for a in rows} == {"event_summary_v4", "event_why_it_matters_v6"}
+        assert len({a.input_hash for a in rows}) == 2
+    assert not db.scalars(
+        select(AIArtifact).where(
+            AIArtifact.entity_key.in_([str(english.id), str(chinese.id)]),
+            AIArtifact.prompt_version.like("%xlang%"),
+        )
+    ).all()
+    summary = next(a for a in artifacts(db, english.id) if a.artifact_type == "event_summary")
     assert summary.provider == "fixture" and summary.model == "fixture-model"
-    assert summary.prompt_version == "event_summary_v4"
-    assert summary.source_content_ids == [str(item.id)]
-    assert summary.output_json["points"][0]["evidence"] == [str(item.id)]
-    # Locales and prompt versions hash separately.
-    assert len({a.input_hash for a in rows}) == 4
+    assert summary.source_content_ids == [str(en_item.id)]
+    assert summary.output_json["points"][0]["evidence"] == [str(en_item.id)]
+    # The Chinese Event was asked for Chinese output with the primary prompt.
+    chinese_requests = [c for c in provider.calls if "工作室" in c["user"]]
+    assert len(chinese_requests) == 2
+    assert all("Simplified Chinese" in c["system"] for c in chinese_requests)
 
 
 def test_second_run_is_a_cached_replay_without_requests(db, factory, settings, sources, tag):
@@ -212,8 +229,8 @@ def test_second_run_is_a_cached_replay_without_requests(db, factory, settings, s
     )
     provider = FixtureProvider(insight_responder)
     result = run(enrich_events(settings, factory, event_ids=[event.id], provider=provider))
-    assert provider.calls == [] and result["replayed"] == 4 and result["requests"] == 0
-    assert len(artifacts(db, event.id)) == 4
+    assert provider.calls == [] and result["replayed"] == 2 and result["requests"] == 0
+    assert len(artifacts(db, event.id)) == 2
 
 
 def test_dry_run_sends_nothing_and_writes_nothing(db, factory, settings, sources, tag):
@@ -226,9 +243,68 @@ def test_dry_run_sends_nothing_and_writes_nothing(db, factory, settings, sources
             dry_run=True,
         )
     )
-    assert result["would_generate"] == 4 and result["estimated_requests"] == 4
+    assert result["would_generate"] == 2 and result["estimated_requests"] == 2
     assert result["events"][0]["source_count"] == 1
+    assert result["events"][0]["primary_locale"] == "en"
     assert artifacts(db, event.id) == []
+
+
+def test_explicit_cross_language_locale_is_refused_without_requests_or_writes(
+    db, factory, settings, sources, tag
+):
+    english, _ = make_event(db, sources[0], f"Studio {tag} announces new game")
+    chinese, _ = make_event(
+        db, sources[2], f"工作室{tag}公布新作", language="zh-CN", at=T0 + timedelta(days=3)
+    )
+    before = db.scalar(select(func.count()).select_from(AIArtifact))
+    for dry_run in (True, False):
+        provider = FixtureProvider(insight_responder)
+        with pytest.raises(ai_enrichment.CrossLanguageGenerationDisabled) as refused:
+            run(
+                enrich_events(
+                    settings,
+                    factory,
+                    event_ids=[english.id, chinese.id],
+                    locales=("en",),
+                    provider=provider,
+                    dry_run=dry_run,
+                )
+            )
+        assert "disabled by product policy" in str(refused.value)
+        assert refused.value.refused == [
+            {"event_id": str(chinese.id), "locale": "en", "primary_locale": "zh-CN"}
+        ]
+        assert provider.calls == []
+    assert db.scalar(select(func.count()).select_from(AIArtifact)) == before
+    # Naming the primary locale explicitly is allowed and generates only that locale.
+    provider = FixtureProvider(insight_responder)
+    result = run(
+        enrich_events(
+            settings, factory, event_ids=[chinese.id], locales=("zh-CN",), provider=provider
+        )
+    )
+    assert result["generated"] == 2 and {a.locale for a in artifacts(db, chinese.id)} == {"zh-CN"}
+
+
+def test_mixed_language_event_has_no_primary_locale_and_gets_no_ai(
+    db, factory, settings, sources, tag
+):
+    from industry_intelligence.services.event_merge import merge_events
+
+    event, _ = make_event(db, sources[0], f"Studio {tag} announces new game")
+    duplicate, _ = make_event(
+        db, sources[2], f"工作室{tag}公布新作", language="zh-CN", at=T0 + timedelta(hours=1)
+    )
+    merge_events(db, event.id, duplicate.id, "reviewed: same announcement in two languages")
+    db.commit()
+    provider = FixtureProvider(insight_responder)
+    result = run(enrich_events(settings, factory, event_ids=[event.id], provider=provider))
+    assert result["tasks"] == 0 and result["skipped_no_primary_locale"] == 1
+    assert provider.calls == [] and artifacts(db, event.id) == []
+    read = event_ai(db, event.id, "en")
+    assert read["primary_locale"] is None
+    assert read["coverage"] == {"required": 0, "available": 0, "complete": False}
+    assert {v["state"] for v in read["insights"].values()} == {"not_generated"}
 
 
 def test_missing_provider_configuration_refuses_before_any_write(
@@ -279,134 +355,136 @@ def test_changed_event_evidence_makes_old_artifacts_stale(db, factory, settings,
     assert event_ai(db, event.id, "en")["insights"]["event_summary"]["state"] == "available"
 
 
-def test_primary_and_cross_language_lineages_go_stale_independently(
+def legacy_xlang(db, event, item, spec, locale, status, text):
+    """A historical cross-language artifact row as stored before AI-LP1."""
+
+    from industry_intelligence.services.ai_evidence import input_hash, load_event_evidence
+
+    row = AIArtifact(
+        entity_type="event",
+        entity_key=str(event.id),
+        artifact_type=spec.artifact_type,
+        locale=locale,
+        provider="fixture",
+        model="fixture-model",
+        prompt_version=spec.version,
+        input_hash=input_hash(spec.version, locale, load_event_evidence(db, event.id)),
+        source_content_ids=[str(item.id)],
+        output_json={"points": [{"text": text, "evidence": [str(item.id)]}]},
+        status=status,
+        artifact_metadata={},
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def test_historical_cross_language_artifacts_are_kept_but_never_read_or_regenerated(
     db, factory, settings, sources, tag, monkeypatch
 ):
-    # Phase 7.1 Checkpoint E: an English Event's en output is primary-locale, its zh-CN output
-    # cross-language; a prompt change in one lineage never makes the other stale.
-    event, _ = make_event(db, sources[0], f"Studio {tag} announces new game")
-
-    def enrich(dry_run=False):
-        return run(
-            enrich_events(
-                settings,
-                factory,
-                event_ids=[event.id],
-                artifact_types=("event_summary",),
-                provider=FixtureProvider(insight_responder),
-                dry_run=dry_run,
-            )
+    # AI-LP1: an English Event with a valid xlang v2 zh-CN Summary and a rejected xlang zh-CN
+    # Why from before the policy. Both rows stay; neither is served, neither creates work, and
+    # neither affects coverage, whatever the UI locale is.
+    event, item = make_event(db, sources[0], f"Studio {tag} announces new game")
+    kept = [
+        legacy_xlang(
+            db, event, item, event_insights.EVENT_SUMMARY_XLANG_V2, "zh-CN", "valid", "旧译文。"
+        ),
+        legacy_xlang(
+            db,
+            event,
+            item,
+            event_insights.EVENT_WHY_IT_MATTERS_XLANG_V1,
+            "zh-CN",
+            "rejected",
+            "被撤下的译文。",
+        ),
+    ]
+    db.commit()
+    result = run(
+        enrich_events(
+            settings, factory, event_ids=[event.id], provider=FixtureProvider(insight_responder)
         )
+    )
+    assert result["generated"] == 2 and result["stale_marked"] == 0
 
-    assert enrich()["generated"] == 2
-    versions = {a.locale: a.prompt_version for a in artifacts(db, event.id, status="valid")}
-    assert versions == {"en": "event_summary_v4", "zh-CN": "event_summary_xlang_v2"}
+    def read(locale):
+        return event_ai(db, event.id, locale)
 
-    def states():
-        return {
-            locale: event_ai(db, event.id, locale)["insights"]["event_summary"]["state"]
-            for locale in ("en", "zh-CN")
-        }
-
-    assert states() == {"en": "available", "zh-CN": "available"}
-    xlang = event_insights.CROSS_LANGUAGE_PROMPTS["event_summary"]
+    for locale in ("en", "zh-CN", None):
+        body = read(locale)
+        assert body["locale"] == locale and body["primary_locale"] == "en"
+        assert body["coverage"] == {"required": 2, "available": 2, "complete": True}
+        for insight in body["insights"].values():
+            assert insight["state"] == "available" and insight["artifact"]["locale"] == "en"
+        assert "旧译文" not in str(body) and "被撤下" not in str(body)
+    plan = run(
+        enrich_events(settings, factory, event_ids=[event.id], dry_run=True, skip_settled=True)
+    )
+    assert (plan["tasks"], plan["cached"], plan["would_generate"]) == (2, 2, 0)
+    assert (plan["skipped_rejected"], plan["skipped_failed"]) == (0, 0)
+    assert [db.get(AIArtifact, row.id).status for row in kept] == ["valid", "rejected"]
+    # A change of the legacy lineage changes nothing; a primary prompt change makes only the
+    # primary artifact stale.
     monkeypatch.setitem(
         event_insights.CROSS_LANGUAGE_PROMPTS,
         "event_summary",
-        replace(xlang, version="event_summary_xlang_v3"),
+        replace(event_insights.EVENT_SUMMARY_XLANG_V2, version="event_summary_xlang_v3"),
     )
-    assert states() == {"en": "available", "zh-CN": "stale"}
-    plan = enrich(dry_run=True)
-    assert (plan["cached"], plan["stale"], plan["would_generate"]) == (1, 1, 1)
-    monkeypatch.setitem(event_insights.CROSS_LANGUAGE_PROMPTS, "event_summary", xlang)
+    assert read("zh-CN")["coverage"]["complete"] is True
     primary = event_insights.INSIGHT_PROMPTS["event_summary"]
     monkeypatch.setitem(
         event_insights.INSIGHT_PROMPTS,
         "event_summary",
         replace(primary, version="event_summary_v99"),
     )
-    assert states() == {"en": "stale", "zh-CN": "available"}
-    result = enrich()
-    assert (result["requests"], result["stale_marked"]) == (1, 1)
-    assert states() == {"en": "available", "zh-CN": "available"}
-    zh = [a for a in artifacts(db, event.id, locale="zh-CN") if a.status == "valid"]
-    assert [a.prompt_version for a in zh] == ["event_summary_xlang_v2"]
-    # Phase 7.1 Checkpoint F: rejecting the current artifact while older-version rows exist
-    # reads "rejected", never "stale" (the reports did not change).
-    current_en = event_ai(db, event.id, "en")["insights"]["event_summary"]["artifact"]["id"]
-    reject_artifact(db, UUID(current_en), "manual audit: unsupported wording")
-    assert artifacts(db, event.id, locale="en", status="stale")
-    assert states() == {"en": "rejected", "zh-CN": "available"}
+    body = read("zh-CN")
+    assert body["insights"]["event_summary"] == {"state": "stale", "artifact": None}
+    assert body["coverage"] == {"required": 2, "available": 1, "complete": False}
+    monkeypatch.setitem(event_insights.INSIGHT_PROMPTS, "event_summary", primary)
+    # Phase 7.1 Checkpoint F: rejecting the current artifact reads "rejected", never "stale".
+    current = read("en")["insights"]["event_summary"]["artifact"]["id"]
+    reject_artifact(db, UUID(current), "manual audit: unsupported wording")
+    assert read("en")["insights"]["event_summary"] == {"state": "rejected", "artifact": None}
+    assert read("en")["coverage"]["available"] == 1
+    assert [db.get(AIArtifact, row.id).status for row in kept] == ["valid", "rejected"]
 
 
-def test_cross_language_summary_v2_supersedes_a_rejected_v1_only_for_that_task(
+def test_rejected_legacy_xlang_summary_creates_no_work_for_a_chinese_event(
     db, factory, settings, sources, tag
 ):
-    # AI-X1: a Chinese Event whose English Summary v1 was rejected in review. Under v2 that task
-    # alone is eligible again (the unattended selector does not skip it), the rejected v1 body is
-    # never served, and the primary Summary/Why and the English Why stay cached.
-    from industry_intelligence.services.ai_evidence import input_hash, load_event_evidence
-
+    # The AI-X1 case under AI-LP1: a Chinese Event whose English Summary v1 was rejected. The
+    # English task no longer exists; the Event is complete with its two Chinese insights.
     event, item = make_event(db, sources[2], f"工作室{tag}公布新作", language="zh-CN")
-    evidence = load_event_evidence(db, event.id)
-    v1 = event_insights.EVENT_SUMMARY_XLANG_V1
-    db.add(
-        AIArtifact(
-            entity_type="event",
-            entity_key=str(event.id),
-            artifact_type="event_summary",
-            locale="en",
-            provider="fixture",
-            model="fixture-model",
-            prompt_version=v1.version,
-            input_hash=input_hash(v1.version, "en", evidence),
-            source_content_ids=[str(item.id)],
-            output_json={"points": [{"text": "Rejected v1 text.", "evidence": [str(item.id)]}]},
-            status="rejected",
-            artifact_metadata={},
-        )
+    rejected = legacy_xlang(
+        db, event, item, event_insights.EVENT_SUMMARY_XLANG_V1, "en", "rejected", "Rejected v1."
     )
     db.commit()
-    for locales, types in (
-        (("zh-CN",), ("event_summary", "event_why_it_matters")),
-        (("en",), ("event_why_it_matters",)),
-    ):
-        run(
-            enrich_events(
-                settings,
-                factory,
-                event_ids=[event.id],
-                locales=locales,
-                artifact_types=types,
-                provider=FixtureProvider(insight_responder),
-            )
+    run(
+        enrich_events(
+            settings, factory, event_ids=[event.id], provider=FixtureProvider(insight_responder)
         )
-    insight = event_ai(db, event.id, "en")["insights"]["event_summary"]
-    assert (insight["state"], insight["artifact"]) == ("not_generated", None)
+    )
     plan = run(
         enrich_events(settings, factory, event_ids=[event.id], dry_run=True, skip_settled=True)
     )
-    assert (plan["tasks"], plan["cached"], plan["would_generate"]) == (4, 3, 1)
-    assert (plan["stale"], plan["skipped_rejected"], plan["skipped_failed"]) == (0, 0, 0)
-    provider = FixtureProvider(insight_responder)
-    result = run(enrich_events(settings, factory, event_ids=[event.id], provider=provider))
-    assert (result["requests"], result["generated"], result["replayed"]) == (1, 1, 3)
-    served = event_ai(db, event.id, "en")["insights"]["event_summary"]
-    assert served["state"] == "available"
-    assert served["artifact"]["prompt_version"] == "event_summary_xlang_v2"
-    assert "Rejected v1 text." not in str(served)
-    assert [a.status for a in artifacts(db, event.id, prompt_version=v1.version)] == ["rejected"]
+    assert (plan["tasks"], plan["cached"], plan["would_generate"]) == (2, 2, 0)
+    body = event_ai(db, event.id, "en")
+    assert body["primary_locale"] == "zh-CN" and body["coverage"]["complete"] is True
+    assert body["insights"]["event_summary"]["artifact"]["locale"] == "zh-CN"
+    assert "Rejected v1." not in str(body)
     again = FixtureProvider(insight_responder)
     assert (
         run(enrich_events(settings, factory, event_ids=[event.id], provider=again))["requests"] == 0
         and again.calls == []
     )
+    assert db.get(AIArtifact, rejected.id).status == "rejected"
 
 
 def test_rejected_artifact_is_never_served_and_regenerates_once(
     db, factory, settings, sources, tag
 ):
-    event, _ = make_event(db, sources[0], f"Studio {tag} announces new game")
+    event, _ = make_event(db, sources[2], f"工作室{tag}公布新作", language="zh-CN")
 
     def enrich():
         return run(
@@ -427,8 +505,9 @@ def test_rejected_artifact_is_never_served_and_regenerates_once(
     app = create_app(settings)
     app.dependency_overrides[get_db_session] = lambda: db
     with TestClient(app) as client:
-        body = client.get(f"/api/v1/events/{event.id}/ai", params={"locale": "zh-CN"}).json()
-        assert body["insights"]["event_summary"] == {"state": "rejected", "artifact": None}
+        for params in ({"locale": "zh-CN"}, {"locale": "en"}):
+            body = client.get(f"/api/v1/events/{event.id}/ai", params=params).json()
+            assert body["insights"]["event_summary"] == {"state": "rejected", "artifact": None}
         result = enrich()
         assert (result["requests"], result["generated"]) == (1, 1)
         body = client.get(f"/api/v1/events/{event.id}/ai", params={"locale": "zh-CN"}).json()
@@ -503,48 +582,64 @@ def test_foreign_evidence_ids_fail_validation_and_are_not_displayed(
 def test_read_model_states_evidence_metadata_and_rejection(db, factory, settings, sources, tag):
     event, item = make_event(db, sources[0], f"Studio {tag} announces new game")
     read = event_ai(db, event.id, "zh-CN")
-    assert read["single_source"] is True
+    assert read["single_source"] is True and read["primary_locale"] == "en"
     assert {k: v["state"] for k, v in read["insights"].items()} == {
         "event_summary": "not_generated",
         "event_why_it_matters": "not_generated",
     }
+    assert read["coverage"] == {"required": 2, "available": 0, "complete": False}
     run(
         enrich_events(
-            settings,
-            factory,
-            event_ids=[event.id],
-            locales=("zh-CN",),
-            provider=FixtureProvider(insight_responder),
+            settings, factory, event_ids=[event.id], provider=FixtureProvider(insight_responder)
         )
     )
+    # A Chinese UI reads the English Event's English insights.
     read = event_ai(db, event.id, "zh-CN")
     summary = read["insights"]["event_summary"]
-    assert summary["state"] == "available"
+    assert summary["state"] == "available" and summary["artifact"]["locale"] == "en"
     evidence = summary["artifact"]["points"][0]["evidence"][0]
     assert evidence["content_id"] == str(item.id) and evidence["url"] == item.url
     assert evidence["position"] == 1 and evidence["source"] == sources[0].name
     why = read["insights"]["event_why_it_matters"]["artifact"]
     assert why["insufficient_evidence"] is True and why["points"] == []
-    assert event_ai(db, event.id, "en")["insights"]["event_summary"]["state"] == "not_generated"
+    assert event_ai(db, event.id, "en")["insights"] == read["insights"]
     reject_artifact(db, UUID(summary["artifact"]["id"]), "reviewer found an inaccuracy")
-    assert event_ai(db, event.id, "zh-CN")["insights"]["event_summary"] == {
-        "state": "rejected",
-        "artifact": None,
-    }
+    after = event_ai(db, event.id, "zh-CN")
+    assert after["insights"]["event_summary"] == {"state": "rejected", "artifact": None}
+    assert after["coverage"] == {"required": 2, "available": 1, "complete": False}
     assert event_ai(db, uuid4(), "en") is None
 
 
-def test_ai_endpoint_reads_persisted_data_and_never_builds_a_provider(
-    db, factory, settings, sources, tag, monkeypatch
-):
+def test_coverage_counts_only_the_two_primary_insights(db, factory, settings, sources, tag):
     event, _ = make_event(db, sources[0], f"Studio {tag} announces new game")
+
+    def responder(**request):
+        if request["schema_name"] == "event_why_it_matters":
+            raise AITimeout()
+        return insight_responder(**request)
+
     run(
         enrich_events(
             settings,
             factory,
             event_ids=[event.id],
-            locales=("en",),
-            provider=FixtureProvider(insight_responder),
+            provider=FixtureProvider(responder),
+            sleep=lambda _: asyncio.sleep(0),
+        )
+    )
+    read = event_ai(db, event.id)
+    assert read["insights"]["event_summary"]["state"] == "available"
+    assert read["insights"]["event_why_it_matters"]["state"] == "failed"
+    assert read["coverage"] == {"required": 2, "available": 1, "complete": False}
+
+
+def test_ai_endpoint_reads_persisted_data_and_never_builds_a_provider(
+    db, factory, settings, sources, tag, monkeypatch
+):
+    event, _ = make_event(db, sources[2], f"工作室{tag}公布新作", language="zh-CN")
+    run(
+        enrich_events(
+            settings, factory, event_ids=[event.id], provider=FixtureProvider(insight_responder)
         )
     )
 
@@ -555,9 +650,20 @@ def test_ai_endpoint_reads_persisted_data_and_never_builds_a_provider(
     app = create_app(get_settings())
     app.dependency_overrides[get_db_session] = lambda: db
     with TestClient(app) as client:
-        response = client.get(f"/api/v1/events/{event.id}/ai", params={"locale": "en"})
-        assert response.status_code == 200
-        assert response.json()["insights"]["event_summary"]["state"] == "available"
+        bodies = []
+        for params in ({"locale": "zh-CN"}, {"locale": "en"}, {}):
+            response = client.get(f"/api/v1/events/{event.id}/ai", params=params)
+            assert response.status_code == 200
+            body = response.json()
+            assert body["locale"] == params.get("locale") and body["primary_locale"] == "zh-CN"
+            summary = body["insights"]["event_summary"]
+            assert summary["state"] == "available" and summary["artifact"]["locale"] == "zh-CN"
+            bodies.append(body["insights"])
+        # The UI locale never changes the content (English UI + Chinese Event = Chinese AI).
+        assert bodies[0] == bodies[1] == bodies[2]
+        assert (
+            client.get(f"/api/v1/events/{event.id}/ai", params={"locale": "fr"}).status_code == 422
+        )
         assert client.get(f"/api/v1/events/{uuid4()}/ai").status_code == 404
 
 

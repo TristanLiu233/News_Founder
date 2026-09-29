@@ -20,6 +20,7 @@ const aiCopy = {
     combinedUnavailable: "AI insights are currently unavailable for this event.",
     disclosure: (reports: number, sources: number) => `${sources === 1 ? `Based on ${reports === 1 ? "1 report" : `${reports} reports`} from a single source` : `Based on ${reports} reports from ${sources} sources`}. AI may make mistakes; check the linked reports.`,
     evidence: "Sources",
+    languageNote: (language: string) => `AI insights are shown in the event's primary language (${language}).`,
     states: {not_generated: "Not generated for this event.", failed: "Not available: the last attempt did not pass checks.", rejected: "Withdrawn after review and not shown.", stale: "Not shown: it was generated from earlier reports or earlier AI instructions."} as Record<string, string>,
     insufficientWhy: "The reports do not give enough context to explain why this matters.",
     insufficientSummary: "The reports are brief; this summary only restates what they report.",
@@ -32,6 +33,7 @@ const aiCopy = {
     combinedUnavailable: "该事件暂无可用的 AI 解读。",
     disclosure: (reports: number, sources: number) => `${sources === 1 ? `依据单一来源的 ${reports} 篇报道` : `依据 ${sources} 个来源的 ${reports} 篇报道`}。AI 可能出错，请以所链接的报道为准。`,
     evidence: "来源",
+    languageNote: (language: string) => `AI 内容按事件主要语言（${language}）生成。`,
     states: {not_generated: "该事件尚未生成。", failed: "暂不可用：最近一次生成未通过校验。", rejected: "经人工审核后已撤下，不予显示。", stale: "不予显示：基于较早的报道或较早的 AI 指令生成。"} as Record<string, string>,
     insufficientWhy: "现有报道不足以说明该事件为何值得关注。",
     insufficientSummary: "报道内容较少，此摘要仅复述报道所述内容。",
@@ -49,7 +51,7 @@ function AIInsightCard({ kind, artifact, locale }: { kind: AIInsightType; artifa
   return <section className="ranking-card ai-card" aria-labelledby={`ai-${kind}`}>
     <h2 id={`ai-${kind}`}>{kind === "event_summary" ? t.summary : t.why}<span className="tag ai-badge">{t.badge}</span></h2>
     {artifact.points.length > 0 && <ul className="ai-points">{artifact.points.map((point, index) => <li key={index}>
-      {point.context && <span className="tag">{t.contexts[point.context] ?? point.context}</span>} <span>{point.text}</span>
+      {point.context && <span className="tag">{t.contexts[point.context] ?? point.context}</span>} <span lang={artifact.locale}>{point.text}</span>
       <span className="ai-evidence"> <span className="visually-hidden">{t.evidence}{locale === "zh-CN" ? "：" : ": "}</span>{point.evidence.map(item => <ExternalLink key={item.content_id} href={item.url} locale={locale}><span title={item.title}>[{item.position}] {item.source}</span></ExternalLink>)}</span>
     </li>)}</ul>}
     {artifact.insufficient_evidence && <p className="section-note">{kind === "event_summary" ? t.insufficientSummary : t.insufficientWhy}</p>}
@@ -59,6 +61,8 @@ function AIInsightCard({ kind, artifact, locale }: { kind: AIInsightType; artifa
 /**
  * What Happened and Why It Matters from persisted, validated artifacts only. Only `available` artifacts
  * carry text; every other state is a one-line note, and one combined note when neither is available.
+ * AI-LP1: the text is in the event's primary language whatever the UI locale is; a one-line note says
+ * so when the two differ. Nothing is translated.
  */
 function AIInsights({ data, failed, locale }: { data?: EventAI; failed: boolean; locale: Locale }) {
   const t = aiCopy[locale];
@@ -68,7 +72,8 @@ function AIInsights({ data, failed, locale }: { data?: EventAI; failed: boolean;
     <h2 id="ai-combined">{t.combined}</h2><p>{t.combinedUnavailable}</p>
   </section>;
   return <div className="ai-insights">
-    <p className="ai-disclosure"><span className="tag ai-badge">{t.badge}</span> {t.disclosure(data.content_count, data.source_count)}</p>
+    <p className="ai-disclosure"><span className="tag ai-badge">{t.badge}</span> {t.disclosure(data.content_count, data.source_count)}
+      {data.primary_locale && data.primary_locale !== locale && <> {t.languageNote(common[locale].languages[data.primary_locale] ?? data.primary_locale)}</>}</p>
     {AI_TYPES.map(kind => {
       const insight = data.insights[kind];
       if (insight.state === "available" && insight.artifact) return <AIInsightCard key={kind} kind={kind} artifact={insight.artifact} locale={locale}/>;
@@ -164,10 +169,11 @@ export default function EventPage() {
     if (!eventId) return;
     const controller = new AbortController();
     setAi(undefined); setAiFailed(false);
-    fetchEventAi(eventId, locale, controller.signal).then(setAi)
+    // The content language is the event's primary language, so a locale switch needs no refetch.
+    fetchEventAi(eventId, controller.signal).then(setAi)
       .catch(() => { if (!controller.signal.aborted) setAiFailed(true); });
     return () => controller.abort();
-  }, [eventId, locale]);
+  }, [eventId]);
   const t = copy[locale]; const c = common[locale];
   if (status === "missing") return <main><div className="shell">
     <p className="eyebrow">{t.eyebrow}</p><h1>{t.notFound}</h1><p className="intro">{t.notFoundNote}</p>

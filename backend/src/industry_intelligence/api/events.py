@@ -63,9 +63,13 @@ def get_event_content(
 def get_event_ai(
     event_id: UUID,
     session: Annotated[Session, Depends(get_db_session)],
-    locale: str = Query("en", pattern="^(en|zh-CN)$"),
+    locale: str | None = Query(None, pattern="^(en|zh-CN)$"),
 ):
-    """Persisted, validated AI insights only; this endpoint never calls an AI provider."""
+    """Persisted, validated AI insights only; this endpoint never calls an AI provider.
+
+    Insights are always in the Event's ``primary_locale`` (AI-LP1); ``locale`` is the optional
+    UI locale, validated and echoed for compatibility, and never selects the content language.
+    """
 
     insights = event_ai(session, event_id, locale)
     if insights is None:

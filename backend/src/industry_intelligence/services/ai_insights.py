@@ -1,9 +1,12 @@
 """Read model for displayable Event AI insights; persisted data only, never a provider call.
 
+AI-LP1: insights are served only in the Event's primary locale (``ai_evidence.primary_locale``)
+from the primary prompts, whatever the UI locale is. Historical cross-language artifacts stay in
+``ai_artifacts`` for audit but are never read here, never served as a fallback, and never count
+toward coverage. A mixed-language Event has no primary locale and reads ``not_generated``.
+
 For each insight type the current evidence hash is recomputed from the Event's persisted
-content with the prompt of the deterministic generation mode (primary-locale or cross-language
-lineage), so staleness never depends on a batch having run and a change in one lineage never
-makes the other stale:
+content with the primary prompt, so staleness never depends on a batch having run:
 
 * ``available``: a ``valid`` artifact built from exactly the current evidence and prompt;
 * ``failed``: the latest attempt for the current evidence failed and no valid artifact exists;
@@ -20,13 +23,13 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS, insight_spec
+from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS
 from industry_intelligence.db.models import AIArtifact
 from industry_intelligence.services.ai_enrichment import ENTITY_EVENT
 from industry_intelligence.services.ai_evidence import (
-    generation_mode,
     input_hash,
     load_event_evidence,
+    primary_locale,
 )
 from industry_intelligence.services.events import resolve_event_redirect
 
@@ -92,38 +95,55 @@ def _insight(spec, evidence, artifacts, locale):
     return {"state": "not_generated", "artifact": None}
 
 
-def event_ai(session, event_id, locale="en"):
-    """AI insights of one canonical Event in ``locale``; None for an unknown Event."""
+def event_ai(session, event_id, locale=None):
+    """AI insights of one canonical Event in its primary locale; None for an unknown Event.
+
+    ``locale`` is the viewer's UI locale; it is echoed back but never selects the content
+    language (``primary_locale`` does). ``coverage`` counts only the two primary tasks.
+    """
 
     canonical_id = resolve_event_redirect(session, event_id)
     evidence = load_event_evidence(session, canonical_id)
     if evidence is None:
         return None
-    artifacts = session.scalars(
-        select(AIArtifact).where(
-            AIArtifact.entity_type == ENTITY_EVENT,
-            AIArtifact.entity_key == str(canonical_id),
-            AIArtifact.locale == locale,
-            AIArtifact.artifact_type.in_(list(INSIGHT_PROMPTS)),
-        )
-    ).all()
-    mode = generation_mode(evidence, locale)
+    primary = primary_locale(evidence)
+    artifacts = []
+    if primary is not None:
+        artifacts = session.scalars(
+            select(AIArtifact).where(
+                AIArtifact.entity_type == ENTITY_EVENT,
+                AIArtifact.entity_key == str(canonical_id),
+                AIArtifact.locale == primary,
+                AIArtifact.artifact_type.in_(list(INSIGHT_PROMPTS)),
+            )
+        ).all()
     by_type = {}
     for artifact in artifacts:
         by_type.setdefault(artifact.artifact_type, []).append(artifact)
+    insights = {
+        artifact_type: (
+            _insight(spec, evidence, by_type.get(artifact_type, []), primary)
+            if primary is not None
+            else {"state": "not_generated", "artifact": None}
+        )
+        for artifact_type, spec in INSIGHT_PROMPTS.items()
+    }
+    available = sum(insight["state"] == "available" for insight in insights.values())
+    required = len(INSIGHT_PROMPTS) if primary is not None else 0
     return {
         "event_id": str(canonical_id),
         "requested_id": str(event_id),
         "redirected": canonical_id != event_id,
         "locale": locale,
+        "primary_locale": primary,
         "ai_generated": True,
         "content_count": evidence.content_count,
         "source_count": evidence.source_count,
         "single_source": evidence.source_count == 1,
-        "insights": {
-            artifact_type: _insight(
-                insight_spec(artifact_type, mode), evidence, by_type.get(artifact_type, []), locale
-            )
-            for artifact_type in INSIGHT_PROMPTS
+        "coverage": {
+            "required": required,
+            "available": available,
+            "complete": required > 0 and available == required,
         },
+        "insights": insights,
     }

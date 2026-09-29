@@ -22,7 +22,8 @@ transaction boundary, so a failure never rolls back work an earlier stage commit
    keeps resolving (``event-rebuild`` stays manual).
 8. ``ai``: optional; ``enrich_events`` over the most recent Events, generating only missing,
    stale, or transiently failed artifacts (valid artifacts replay, reviewer rejections and
-   non-transient failures are left for an operator).
+   non-transient failures are left for an operator). Primary locale only (AI-LP1): at most two
+   tasks (Summary, Why It Matters) and so two provider requests per Event.
 9. ``postcheck``: ``data-quality-audit`` again (read-only).
 
 Source failures are isolated per source. A failed ``links`` stage skips ``events`` and ``ai``;
@@ -435,7 +436,15 @@ async def ai_stage(settings, session_factory, limit, provider=None, dry_run=Fals
         stage.errors.append({"error": type(exc).__name__})
         logger.warning("stage=ai event=stage_failed error=%s", type(exc).__name__)
         return stage
-    keys = ("tasks", "cached", "stale", "would_generate", "skipped_rejected", "skipped_failed")
+    keys = (
+        "tasks",
+        "cached",
+        "stale",
+        "would_generate",
+        "skipped_rejected",
+        "skipped_failed",
+        "skipped_no_primary_locale",
+    )
     stage.counts = {"events": len(result["events"]), **{key: result[key] for key in keys}}
     if not dry_run:
         stage.counts.update(

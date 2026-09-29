@@ -549,13 +549,31 @@ def _locale_of(language):
 def generation_mode(evidence, locale):
     """``primary`` when every report is in ``locale``'s language, else ``cross_language``.
 
-    Deterministic, from the persisted ContentItem languages only; it selects the prompt lineage
-    (``event_insights.insight_spec``), so each (Event, type, locale) has exactly one lineage.
+    Deterministic, from the persisted ContentItem languages only. Since AI-LP1 only the
+    ``primary`` mode is generated or served; ``cross_language`` identifies the legacy lineage
+    of historical artifacts (``event_insights.insight_spec``).
     """
 
     if evidence.items and all(_locale_of(item.language) == locale for item in evidence.items):
         return PRIMARY
     return CROSS_LANGUAGE
+
+
+AI_LOCALES = ("en", "zh-CN")
+
+
+def primary_locale(evidence):
+    """The Event's primary locale: the one supported locale every report is written in, else None.
+
+    AI-LP1: Event AI is generated and served only in this locale (the ``primary`` generation
+    mode). A mixed-language Event, or one whose reports are in an unsupported language, has no
+    primary locale and gets no AI; nothing is translated.
+    """
+
+    locales = {_locale_of(item.language) for item in evidence.items}
+    if len(locales) == 1 and (locale := locales.pop()) in AI_LOCALES:
+        return locale
+    return None
 
 
 def cross_language_errors(text, evidence_text):
