@@ -11,7 +11,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The Python virtualenv lives at the repository root (`.venv/`); backend commands run from `backend/` (e.g. `../.venv/bin/pytest`).
 - `Settings` (`backend/src/industry_intelligence/config.py`) always loads the repository-root `.env` by absolute path, so the CLI, Alembic, and pytest share one `DATABASE_URL` regardless of working directory. `migrations/env.py` overrides the URL in `alembic.ini` with that setting.
 - `.env` is gitignored and holds local-only values such as `AI_API_KEY` (Phase 7), `SOURCE_CONTACT` (the deployment maintainer's own contact, sent only to Wikimedia hosts) and `SEC_CONTACT` (a separate contact, sent only to SEC hosts). `HTTPClient` enforces this per request host. Never print them or copy a real value into tracked files; `.env.example` keeps only placeholders.
-- PostgreSQL with pgvector comes from `docker compose up -d` (image `pgvector/pgvector:pg16`).
+- PostgreSQL with pgvector comes from `docker compose up -d` (image `pgvector/pgvector:pg16`; the compose file publishes it on 127.0.0.1 only).
+- `backend/constraints.txt` pins the exact tested dependency set: `pip install -c backend/constraints.txt -e "./backend[dev]"`. The backend must stay an editable install/checkout: `Settings` and the update precheck locate `.env` and `backend/alembic.ini` relative to the source tree.
+- Production readiness (Deployment-1; nothing deployed): `docs/deployment.md` holds the runtime map, env-var classes, verified production commands, backup/restore policy, the chosen architecture (single VPS, Compose, Caddy, systemd timers), and the Deployment-2 scope. `ENVIRONMENT=production` hides `/docs`, `/redoc`, `/openapi.json`.
 
 ```bash
 # backend/ — API server
@@ -76,6 +78,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.industry-intellige
 
 # frontend/ — dev server (reads NEXT_PUBLIC_API_BASE_URL from frontend/.env.local)
 npm run dev
+# frontend/ — production build and server (NEXT_PUBLIC_API_BASE_URL is inlined at build time)
+npm run build && npm start
 ```
 
 Tests marked `integration` (`tests/integration/`) connect to the database from the root `.env` — the same dev database, not a separate test one — and wrap every test in a transaction that is rolled back. They need Docker running and migrations at head. The `settings` fixture in `tests/conftest.py` points at a nonexistent `_test` database and is only for app-factory/API tests that never connect.

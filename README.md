@@ -73,7 +73,7 @@ docker compose up -d
 
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e "./backend[dev]"
+python -m pip install -c backend/constraints.txt -e "./backend[dev]"  # exact tested versions
 
 cd backend
 alembic upgrade head
@@ -868,3 +868,20 @@ Exit codes in the log and in `launchctl print` are the command's: `0` success, `
 earlier stages may have committed; investigate before the next run), `4` already running
 (another update held the lock; nothing was done), `78` refused by the wrapper (system time zone).
 Running the wrapper by hand (without `--plan`) performs a real update.
+
+## Deployment-1 — Production readiness
+
+Status (2026-09-30): audit complete, **nothing deployed**. The development Mac is a valid local
+operation (daily launchd update at 10:00 Australia/Sydney), not production. The chosen production
+architecture is one Linux VPS with Docker Compose (PostgreSQL + pgvector on a private network,
+FastAPI and `next start` behind Caddy with automatic HTTPS on one origin) and systemd timers for
+the 10:00 Australia/Sydney `intelligence-update --skip-ai` run and daily backups. Runtime map,
+configuration classes, verified production commands, backup/restore policy, readiness matrix,
+and the Deployment-2 scope: [docs/deployment.md](docs/deployment.md).
+
+- `ENVIRONMENT=production` hides `/docs`, `/redoc`, and `/openapi.json`.
+- `NEXT_PUBLIC_API_BASE_URL` is inlined at build time; a production build needs the public origin.
+- Frontend production start: `npm run build && npm start`.
+- Backend production start: `uvicorn industry_intelligence.main:app --host 127.0.0.1 --port 8000 --workers 2`
+  from `backend/` (no `--reload`).
+- Backups: `pg_dump -Fc` (1.4 MB today); restore with `pg_restore` from a file (not a pipe).
