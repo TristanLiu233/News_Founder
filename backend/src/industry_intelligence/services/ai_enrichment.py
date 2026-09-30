@@ -164,7 +164,8 @@ def select_bounded_events(session, max_events=DEFAULT_MAX_EVENTS):
     max_events = validate_max_events(max_events)
     queues = {}
     for domain in Domain:
-        trending = domain_trending(session, domain, limit=None, summaries=False)
+        # The native view keeps the Product-1 selection unchanged (catalog order, no age filter).
+        trending = domain_trending(session, domain, limit=None, summaries=False, view="native")
         candidates = [UUID(item["event"]["id"]) for item in trending["items"]]
         candidates += session.scalars(
             select(Event.id)

@@ -27,11 +27,12 @@ export function TrendBadge({ trend, change, locale }: { trend: Trend | null; cha
 
 /**
  * One Trending Event (Trending and Home): headline → Event Detail, then every publisher's own rank
- * for its reports exactly as published (never combined or compared), time, coverage, and Topics as
- * context. There is deliberately no platform position number. `showSummary` (Home) adds the persisted
- * summary, labelled as AI-generated or as a publisher excerpt; a card without one simply has no summary.
+ * for its reports exactly as published (the evidence for why it is here), time, coverage, and Topics
+ * as context. There is deliberately no platform position number or score. `showSummary` (Home) adds the
+ * persisted summary, labelled as AI-generated or as a publisher excerpt; a card without one simply has
+ * no summary. `showMovement` (the publisher-list view only) adds same-list movement badges.
  */
-export function TrendingEventCard({ item, locale, compact = false, showSummary = false }: { item: TrendingEventItem; locale: Locale; compact?: boolean; showSummary?: boolean }) {
+export function TrendingEventCard({ item, locale, compact = false, showSummary = false, showMovement = false }: { item: TrendingEventItem; locale: Locale; compact?: boolean; showSummary?: boolean; showMovement?: boolean }) {
   const t = common[locale];
   const { event, summary } = item;
   return <li className="trending-event">
@@ -43,7 +44,7 @@ export function TrendingEventCard({ item, locale, compact = false, showSummary =
     <ul className="rank-evidence" aria-label={t.publisherRanks}>
       {item.external_rankings.map(ranking => <li key={`${ranking.source_key}:${ranking.content_item_id}`}>
         <span>{ranking.source} · {ranking.list_name}</span> <strong className="native-rank"><span className="visually-hidden">{t.rankWord} </span>#{ranking.rank}</strong>
-        <MovementBadge ranking={ranking} locale={locale}/>
+        {showMovement && <MovementBadge ranking={ranking} locale={locale}/>}
       </li>)}
     </ul>
     {item.native_list_count > 1 && <p className="multi-list">{t.onLists(item.native_list_count, item.native_publisher_count)}</p>}

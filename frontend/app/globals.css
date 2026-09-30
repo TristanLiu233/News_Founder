@@ -330,3 +330,7 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .home-search { display: flex; gap: .5rem; margin-top: .6rem; }
 .home-search input { flex: 1; min-width: 0; padding: .6rem .7rem; border: 1px solid #a6afa6; border-radius: .4rem; }
 .home-search button { padding: .6rem 1.1rem; border: 0; border-radius: .4rem; background: #087f5b; color: white; }
+/* Trending-3: Combined | By publisher list switch, and inline links in section notes. */
+.view-tabs { margin-top: .25rem; }
+.view-tabs button { padding: .35rem .85rem; font-size: .82rem; }
+.section-note .link-button { margin-top: 0; font-size: inherit; }

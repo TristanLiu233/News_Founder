@@ -131,7 +131,7 @@ python -m industry_intelligence.cli rank computer
 | GET | `/api/v1/today` | Latest source-native lists |
 | GET | `/api/v1/trending` | Events on publishers' own ranked article lists, per domain, with every native rank as evidence (no score) |
 | GET | `/api/v1/trending?domain=gaming&limit=20` | One domain; optional `limit` (1–100, default 20), `total` reports the number of Event cards |
-| GET | `/api/v1/trending?limit=4&selection=home` | Home's sample (Trending-2): recent Events, the domain's publisher lists taken in turn; `selection` is `native` (default) or `home` |
+| GET | `/api/v1/trending?view=native` | `view` is `aggregate` (default, Trending-3: current Events in one presentation order derived from their native ranks; no score is returned) or `native` (the publisher lists in catalog order, each in its own order, with movement); the Trending-2 `selection=home\|native` still works as an alias |
 | GET | `/api/v1/subjects/{id}` | Canonical subject detail (redirect-aware) |
 | GET | `/api/v1/subjects/{id}/history?limit=30` | Composite rank history from successful runs |
 
@@ -141,9 +141,9 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 
 | Route | Purpose | Default size |
 | --- | --- | --- |
-| `/` | Event-first dashboard (Product-1) composed from existing APIs: Trending Events per domain first (Trending-2: recent Events from the domain's publisher lists taken in turn, each Event once; publisher ranks as published; each card with one persisted summary — the Event's AI Summary, else a publisher excerpt, else none), then Today at a Glance, Latest Events, live External Company Rankings shown as published, and Explore (Companies, Search); no Home score, and nothing is generated on a page load | 4 Events per domain, 3 reports per domain, 5 Events, Top 5 per ranking |
+| `/` | Event-first dashboard (Product-1) composed from existing APIs: Trending Events per domain first (Trending-3: the first four of the same aggregate order as `/trending`; publisher ranks as published; each card with one persisted summary — the Event's AI Summary, else a publisher excerpt, else none), then Today at a Glance, Latest Events, live External Company Rankings shown as published, and Explore (Companies, Search); no Home score, and nothing is generated on a page load | 4 Events per domain, 3 reports per domain, 5 Events, Top 5 per ranking |
 | `/today` | Discover · Today: source-native content, one domain tab at a time. Every domain shows Latest News first (its `news`/`feed` sources from `/api/v1/sources`, read through `/api/v1/news`); Computer and Gaming then show their source rankings, Finance shows Market Pulse in a collapsed secondary section | 5 per source, View More |
-| `/trending` | Discover · Trending (Trending-1): Event cards for the domain's publisher ranked article lists; each card shows the headline (→ Event Detail), every publisher rank exactly as published (e.g. "Gematsu · Popular Posts #2") with its same-list movement since the previous collection (↑3, ↓2, —, NEW; Trending-2), time, report/source counts, and Topics; lists shown with their stated window and observation time; no platform score or position | 20 events, expandable to 50 |
+| `/trending` | Discover · Trending: Event cards for the domain's publisher ranked article lists. Combined (default, Trending-3): current Events placed by their best publisher rank, with a small lift for Events that more than one publisher lists; By publisher list (`?view=native`): each list in its publisher's order with same-list movement (↑3, ↓2, —, NEW; Trending-2). Each card shows the headline (→ Event Detail), every publisher rank exactly as published (e.g. "Gematsu · Popular Posts #2"), time, report/source counts, and Topics; lists shown with their stated window and observation time; no platform score or position number | 20 events, expandable to 50 |
 | `/search` | Discover · Search: multilingual topic (Subject) search with a query and domain tabs; type, source (`searchable` keys from `/api/v1/sources`), and language are under More filters; no search-mode control (the backend default is used) | 20 per page |
 | `/subject/{id}` | Topic (Subject) Detail: current rank and trend, related Events (hidden when none), rank history, where it appears (source lists), related news collapsed (the same reports are grouped under related Events), aliases, and a collapsed Methodology note (score, observations, link rules) | 20 lists, 10 news per page, 5 related Events |
 | `/rankings` | External company rankings per domain: ranking selector (only rankings with a collected snapshot; a direct link still opens a never-collected one), one-line publisher/metric/date/coverage/original-source meta and disclaimer, a collapsed About this ranking note (cadence, acquisition, observed time, source column and description), latest snapshot table with movement, dropped entries, company names linking to Company Detail, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
@@ -1135,7 +1135,7 @@ The implementation record, source audit, 10-Event live AI audit, and verificatio
 - **Several lists are shown as evidence.** An Event on more than one publisher list shows each
   rank separately and a line such as "On 2 publisher lists"; the count is descriptive and does
   not change the order.
-- **Home is a sample, not a ranking.** Home's Trending Events take the domain's publisher lists in
+- **Home is a sample, not a ranking** (replaced by Trending-3's shared Combined order). Home's Trending Events took the domain's publisher lists in
   turn (for Finance: 新浪财经 #1, 东方财富 #1, 新浪财经 #2, 东方财富 #2 …), each list in its own
   order, each Event once (with all its ranks). Only Events whose latest report was published at
   most 48 hours before the list was collected appear on Home; `/trending` still shows every listed
@@ -1146,3 +1146,23 @@ The implementation record, source audit, 10-Event live AI audit, and verificatio
   returns Home's sample with its eligibility rule. There is still no score.
 
 The implementation record and live verification are in `DEVELOPMENT.md`.
+
+## Trending-3 — One combined, Event-centric Trending per domain
+
+- **What it answers.** "What are several selected publishers paying attention to right now?"
+  Computer (Hacker News Top Stories), Finance (新浪财经 点击量排行, 东方财富 网友点击排行榜), and
+  Gaming (Gematsu Popular Posts, 3DM 近期热门) are ordered separately; there is no global list.
+- **One card per canonical Event.** Articles share a card only when they already belong to the
+  same Event; similar headlines about different Events stay separate. Every publisher rank the
+  Event has is shown as published, and is the reason it is there.
+- **Order (Combined view, also used by Home).** Only current Events (latest report at most 48 hours
+  before the list that lists it). Each Event is placed by its best publisher rank, all lists on one
+  shared scale; an Event that another publisher lists as well moves up three places per
+  additional publisher (at most two). Ties: more publishers, then the newer report. This is a
+  display order, not a popularity, importance, or quality score, and no score is shown or
+  returned. `python -m industry_intelligence.cli trending-order` prints the order with its inputs
+  for auditing.
+- **By publisher list** (`/trending?view=native`) keeps every list in the publisher's own order,
+  including older listed Events, with the same-list movement badges of Trending-2.
+- No migration; the order is computed on read from stored list snapshots. The implementation
+  record and live examples are in `DEVELOPMENT.md`.

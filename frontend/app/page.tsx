@@ -32,7 +32,7 @@ const copy = {
     intro: "What is happening now in Computer, Finance and Gaming: events on publishers' own ranked lists first, then the latest reports, external company rankings and search.",
     today: "Today at a Glance", todayNote: "Latest reports from each domain's news sources, newest first.", viewToday: "View Today", noNews: "No reports for this domain yet.",
     events: "Latest Events", eventsNote: "Most recently reported events across all domains.", viewEvents: "View all events", noEvents: "No events yet.",
-    trending: "Trending Events", trendingNote: "Recent events from publishers' own hot lists, taking each list in turn. The order is not a platform popularity score. Summaries are AI-generated from the listed reports or are publisher excerpts.", viewTrending: "View Trending", noTrending: "No trending events for this domain yet.",
+    trending: "Trending Events", trendingNote: "Current events from selected publishers' own hot lists, placed by their best publisher position; events on more than one publisher's list come first among near-equal positions. Not a popularity score. Summaries are AI-generated from the listed reports or are publisher excerpts.", viewTrending: "View Trending", noTrending: "No trending events for this domain yet.",
     rankings: "External Company Rankings", rankingsNote: "Rankings are shown as published by their original sources.", viewRankings: "View all rankings",
     noRankings: "No external rankings have been collected yet.", rankingFailed: "This ranking could not be loaded.",
     snapshot: "As of", notEnoughHistory: "Not enough history yet", openRanking: "Open ranking",
@@ -48,7 +48,7 @@ const copy = {
     intro: "计算机、金融、游戏三个领域正在发生什么：先看登上发布方自有榜单的事件，再看最新报道、外部公司排行榜与搜索。",
     today: "今日速览", todayNote: "各领域资讯来源的最新报道，按时间由新到旧。", viewToday: "查看今日", noNews: "该领域暂无报道。",
     events: "最近事件", eventsNote: "各领域最近被报道的事件。", viewEvents: "查看全部事件", noEvents: "暂无事件。",
-    trending: "热门事件", trendingNote: "选自发布方自有热门榜单的近期事件，各榜单轮流取用。展示顺序并非平台热度评分。摘要由 AI 根据所列报道生成，或为发布方原文摘录。", viewTrending: "查看热门", noTrending: "该领域暂无热门事件。",
+    trending: "热门事件", trendingNote: "选自发布方自有热门榜单的近期事件，按其在发布方榜单中的最佳名次排列；同时出现在多个来源榜单的事件在名次相近时靠前。展示顺序并非热度评分。摘要由 AI 根据所列报道生成，或为发布方原文摘录。", viewTrending: "查看热门", noTrending: "该领域暂无热门事件。",
     rankings: "外部公司排行榜", rankingsNote: "排行榜按原始来源发布的内容原样展示。", viewRankings: "查看全部排行榜",
     noRankings: "尚未采集到外部排行榜。", rankingFailed: "该榜单暂时无法加载。",
     snapshot: "数据日期", notEnoughHistory: "尚无足够历史数据", openRanking: "打开榜单",
@@ -82,9 +82,9 @@ const newsLoaders = Object.fromEntries(DOMAINS.map(domain => [
 ])) as Record<Domain, (signal: AbortSignal) => Promise<NewsPage>>;
 const loadEvents = (signal: AbortSignal) => fetchEvents({limit: LATEST_EVENTS}, signal);
 // One request returns the Top 5 of every domain.
-// Trending-2: Home's presentation sample (recent Events; the publisher lists taken in turn, each in
-// its own order; each Event once). Not an overall rank; /trending shows the full native lists.
-const loadTrending = (signal: AbortSignal) => fetchTrending(signal, {limit: TRENDING_TOP, selection: "home"});
+// Trending-3: the same aggregate order as /trending (current Events by best publisher rank plus a small
+// bonus per additional publisher), first TRENDING_TOP per domain. A display order, not a score.
+const loadTrending = (signal: AbortSignal) => fetchTrending(signal, {limit: TRENDING_TOP});
 
 type RankingCardData = {summary: CompanyRankingSummary; detail?: CompanyRankingDetail};
 

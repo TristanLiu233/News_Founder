@@ -206,7 +206,7 @@ def test_trending_events_come_before_more_recent_ones(db, sources, monkeypatch):
     older = make_event(db, sources, Domain.COMPUTER, f"listed story {uuid4().hex[:6]}", 1)
     newer = make_event(db, sources, Domain.COMPUTER, f"newer story {uuid4().hex[:6]}", 50)
 
-    def fake_trending(_session, domain, limit=None, summaries=True):
+    def fake_trending(_session, domain, limit=None, summaries=True, **_kwargs):
         assert summaries is False and limit is None
         items = [{"event": {"id": str(older.id)}}] if str(domain) == "computer" else []
         return {"items": items}

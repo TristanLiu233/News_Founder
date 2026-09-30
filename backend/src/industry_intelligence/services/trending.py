@@ -4,12 +4,23 @@ For each domain, the latest snapshot of every ``NEWS_RANKINGS`` list is read (on
 snapshot per list, never mixed with older ones). Each listed article is a ``ContentItem``; its
 existing ``EventContentLink`` gives the Event (reviewed merges and rebuild-retired IDs resolve
 through ``resolve_event_redirect``). An Event listed by several articles or lists is one card
-that keeps every external rank as separate evidence.
+that keeps every external rank as separate evidence. Trending never groups articles itself: two
+articles are one card only when they already belong to the same canonical Event.
 
-Nothing is scored. There is no trend, hot, weighted, combined, or AI score, and ranks from
-different publishers are never compared. Display order (``ORDERING``): lists in fixed catalog
-order, each in its publisher's own rank order; an Event appears once, at its first listing.
-The order is therefore not a popularity judgement across publishers.
+Two views (Trending-3):
+
+- ``aggregate`` (default; ``/trending`` and Home): the domain's current Events in one
+  deterministic presentation order (``aggregate_order``). Eligibility first: the Event's latest
+  report is at most ``MAX_REPORT_AGE`` older than the most recent list observation that lists it
+  (``current_eligible``). Order: ``ordering_value = rank_signal(best native rank) +
+  publisher_bonus(independent publishers)``, where ``rank_signal`` puts every list on one shared
+  depth scale (#1 = 1.0, each place ``1/REFERENCE_DEPTH`` lower) and each additional publisher
+  adds ``PUBLISHER_BONUS`` (= 3 places), capped at ``MAX_BONUS_PUBLISHERS``. Ties: more
+  publishers, better best rank, newer latest report, Event ID. The value is internal: it is not
+  a popularity, importance, or quality score, is never returned by the API, and never replaces
+  the native ranks each card shows. It uses current snapshots only (no history, no movement).
+- ``native``: every listed Event, lists in fixed catalog order, each in its publisher's own
+  rank order; an Event appears once, at its first listing (``ORDERING``). No age filter.
 
 A listed article that has no Event yet (it is assigned by the next ``events`` stage) is not
 shown as a card and never gets an Event made for Trending; it is counted per list as
@@ -22,23 +33,17 @@ first point of the Event's displayable AI Summary (``ai_insights.available_summa
 current evidence and prompt, primary locale), else a stored publisher excerpt of one of its
 reports (``events.event_excerpts``), else ``None``. Nothing is generated on a request.
 
-Trending-2 adds, still without any score:
+Trending-2 metadata (descriptive only; never used for ordering):
 
 - Rank movement (``rank_movement``): each external rank is compared with the same article's
   rank in the immediately previous stored snapshot of the *same* list (same ``source_key``,
   ``list_key``, ``ranking_kind``, and publisher-stated window). ``rank_delta = previous_rank -
   current_rank``; movement is ``up``/``down``/``stable``, ``new`` when the article is absent
   from a complete previous snapshot, and ``None`` when no comparable previous snapshot exists.
-  Ranks of different lists or publishers are never compared. ``first_ranked_at`` is the
-  earliest stored snapshot of the list (same window) that listed the article, so a ``new``
-  article that was listed before is marked ``reentered``.
+  ``first_ranked_at`` is the earliest stored snapshot of the list (same window) that listed the
+  article, so a ``new`` article that was listed before is marked ``reentered``.
 - Multi-list evidence (``native_list_evidence``): how many distinct lists and publishers list
-  the Event. Descriptive only; it never changes the order.
-- Home selection (``selection="home"``): Home-eligible Events (latest report at most
-  ``HOME_MAX_REPORT_AGE`` older than a list observation that lists them) taken one list at a
-  time in catalog order, each list in its own native order, skipping Events already taken
-  (``home_round_robin``). A presentation sample, not an overall rank; ``/trending`` itself is
-  unchanged by it.
+  the Event.
 
 Queries do not grow with the number of listed articles: the latest two snapshots of every list
 come from one windowed query, first listings from one aggregate query, and Event resolution is
@@ -49,6 +54,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from fractions import Fraction
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -69,14 +75,22 @@ from industry_intelligence.services.events import (
 from industry_intelligence.services.news_ranking_ingestion import RESULT_KIND
 
 ORDERING = "list_catalog_order_then_native_rank"
-HOME_ORDERING = "home_list_round_robin"
-SELECTIONS = ("native", "home")
+AGGREGATE_ORDERING = "best_native_rank_plus_publisher_bonus"
+VIEWS = ("aggregate", "native")
+# Backward-compatible `selection` query values (Trending-2) mapped onto views.
+SELECTION_VIEWS = {"home": "aggregate", "native": "native"}
 DEFAULT_LIMIT = 20
-# Trending-2: Home shows an Event only when its latest report was published at most this long
-# before a list observation that lists it (chosen from the live age distribution; see
-# DEVELOPMENT.md). /trending itself never filters by age.
-HOME_MAX_REPORT_AGE = timedelta(hours=48)
-HOME_RULE = "latest_report_within_hours_of_list_observation"
+# Trending-3 aggregate order (see the module docstring and DEVELOPMENT.md). One shared depth scale
+# for every list: the lists are prefixes of far larger article sets (widget size or tracked
+# prefix: Gematsu 4, 3DM 8, 东方财富 10, 新浪财经 20, Hacker News 30), so a list's length is not
+# its population and is not used to normalise its ranks.
+REFERENCE_DEPTH = 30
+PUBLISHER_BONUS = Fraction(1, 10)  # = 3 places on the shared scale
+MAX_BONUS_PUBLISHERS = 2
+# Aggregate eligibility: an Event is current when its latest report was published at most this
+# long before a list observation that lists it (Trending-2 Home rule, now for the aggregate view).
+MAX_REPORT_AGE = timedelta(hours=48)
+ELIGIBILITY_RULE = "latest_report_within_hours_of_list_observation"
 
 
 def _iso(value):
@@ -175,39 +189,48 @@ def native_list_evidence(rankings):
     }
 
 
-def home_eligible(last_published_at, observations):
-    """True when the Event's latest report is at most ``HOME_MAX_REPORT_AGE`` older than the
-    most recent observation of a list that lists it (ages are measured when the publisher
-    listed it, so the rule does not change between update runs)."""
+def current_eligible(last_published_at, observations):
+    """True when the Event's latest report is at most ``MAX_REPORT_AGE`` older than the most
+    recent observation of a list that lists it (ages are measured when the publisher listed it,
+    so the rule does not change between update runs)."""
 
     if last_published_at is None or not observations:
         return False
-    return max(observations) - last_published_at <= HOME_MAX_REPORT_AGE
+    return max(observations) - last_published_at <= MAX_REPORT_AGE
 
 
-def home_round_robin(queues, limit):
-    """Take the next not-yet-taken Event of each list in turn (lists in the given order, each
-    list in its own native order) until ``limit`` or every list is exhausted. Pure. The result
-    is a presentation order, not an overall rank."""
+def rank_signal(rank):
+    """One native rank on the shared depth scale: #1 = 1, each place ``1/REFERENCE_DEPTH`` lower;
+    ranks deeper than ``REFERENCE_DEPTH`` share the floor. Bounded, monotonic, exact."""
 
-    positions = [0] * len(queues)
-    selected, taken = [], set()
-    while limit is None or len(selected) < limit:
-        progressed = False
-        for index, queue in enumerate(queues):
-            if limit is not None and len(selected) >= limit:
-                break
-            while positions[index] < len(queue) and queue[positions[index]] in taken:
-                positions[index] += 1
-            if positions[index] < len(queue):
-                event_id = queue[positions[index]]
-                positions[index] += 1
-                selected.append(event_id)
-                taken.add(event_id)
-                progressed = True
-        if not progressed:
-            break
-    return selected
+    rank = min(max(int(rank), 1), REFERENCE_DEPTH)
+    return Fraction(REFERENCE_DEPTH + 1 - rank, REFERENCE_DEPTH)
+
+
+def publisher_bonus(publisher_count):
+    """A small corroboration bonus per additional independent publisher, capped."""
+
+    return PUBLISHER_BONUS * min(max(publisher_count - 1, 0), MAX_BONUS_PUBLISHERS)
+
+
+def ordering_value(best_rank, publisher_count):
+    """Internal presentation-order value of one Event: best native signal + bonus. Not a score."""
+
+    return rank_signal(best_rank) + publisher_bonus(publisher_count)
+
+
+def aggregate_order(candidates):
+    """Event IDs in aggregate presentation order. ``candidates``: (event_id, best native rank,
+    independent publisher count, latest report time or None). Pure and deterministic: higher
+    ``ordering_value``, then more publishers, better best rank, newer latest report, Event ID."""
+
+    def key(candidate):
+        event_id, best_rank, publishers, latest = candidate
+        newest = -latest.timestamp() if latest is not None else float("inf")
+        value = ordering_value(best_rank, publishers)
+        return (-value, -publishers, best_rank, newest, str(event_id))
+
+    return [candidate[0] for candidate in sorted(candidates, key=key)]
 
 
 FIRST_RANKED_SQL = text(
@@ -279,9 +302,14 @@ def card_summaries(session, event_ids):
     return output
 
 
-def domain_trending(session, domain, limit=DEFAULT_LIMIT, summaries=True, selection="native"):
-    if selection not in SELECTIONS:
-        raise ValueError(f"Unknown Trending selection: {selection}")
+def domain_trending(
+    session, domain, limit=DEFAULT_LIMIT, summaries=True, view="aggregate", explain=False
+):
+    """One domain's Trending. ``explain`` (debug CLI only, never the API) adds each card's
+    ``ordering_inputs``."""
+
+    if view not in VIEWS:
+        raise ValueError(f"Unknown Trending view: {view}")
     snapshots = snapshot_pairs(session, domain)
     lists, evidence, comparisons, previous_ranks = [], [], [], []
     for definition, batch, previous in snapshots:
@@ -325,7 +353,6 @@ def domain_trending(session, domain, limit=DEFAULT_LIMIT, summaries=True, select
     resolved = resolve_owners(session, owners.values())
     first_ranked = first_rankings(session, [d.key for d, *_ in snapshots], content_ids)
     order, rankings = [], defaultdict(list)
-    queues = [[] for _ in lists]
     observations = defaultdict(list)
     pending = defaultdict(int)
     for index, definition, batch, entry in evidence:
@@ -341,8 +368,6 @@ def domain_trending(session, domain, limit=DEFAULT_LIMIT, summaries=True, select
         event_id = resolved[owner]
         if event_id not in rankings:
             order.append(event_id)
-        if event_id not in queues[index]:
-            queues[index].append(event_id)
         observations[event_id].append(batch.observed_at)
         comparable, complete = comparisons[index]
         previous_rank, delta, movement = rank_movement(
@@ -384,23 +409,30 @@ def domain_trending(session, domain, limit=DEFAULT_LIMIT, summaries=True, select
     result = {
         "domain": str(domain),
         "status": "ready" if snapshots else "unavailable",
-        "selection": selection,
+        "view": view,
         "ordering": ORDERING,
         "lists": lists,
     }
-    if selection == "home":
+    best = {event_id: min(r["rank"] for r in rankings[event_id]) for event_id in order}
+    publishers = {
+        event_id: native_list_evidence(rankings[event_id])["native_publisher_count"]
+        for event_id in order
+    }
+    if view == "aggregate":
         eligible = {
             event_id
             for event_id in order
-            if home_eligible(events[event_id].last_published_at, observations[event_id])
+            if current_eligible(events[event_id].last_published_at, observations[event_id])
         }
-        order = home_round_robin(
-            [[event_id for event_id in queue if event_id in eligible] for queue in queues], None
+        order = aggregate_order(
+            (event_id, best[event_id], publishers[event_id], events[event_id].last_published_at)
+            for event_id in order
+            if event_id in eligible
         )
-        result["ordering"] = HOME_ORDERING
-        result["home_eligibility"] = {
-            "rule": HOME_RULE,
-            "max_report_age_hours": int(HOME_MAX_REPORT_AGE.total_seconds() // 3600),
+        result["ordering"] = AGGREGATE_ORDERING
+        result["eligibility"] = {
+            "rule": ELIGIBILITY_RULE,
+            "max_report_age_hours": int(MAX_REPORT_AGE.total_seconds() // 3600),
             "eligible_count": len(eligible),
             "excluded_count": len(events) - len(eligible),
         }
@@ -412,33 +444,67 @@ def domain_trending(session, domain, limit=DEFAULT_LIMIT, summaries=True, select
     items = []
     for event_id in shown:
         event_subjects = subjects.get(event_id, [])
-        items.append(
-            {
-                "event": _summary(
-                    events[event_id],
-                    sources.get(event_id, []),
-                    languages.get(event_id, []),
-                    event_subjects,
-                    companies.get(event_id, []),
-                ),
-                "external_rankings": rankings[event_id],
-                **native_list_evidence(rankings[event_id]),
-                "topics": [
-                    subject
-                    for subject in event_subjects
-                    if subject["subject_type"] != str(SubjectType.EVENT)
-                ],
-                "summary": summaries.get(event_id),
+        card = {
+            "event": _summary(
+                events[event_id],
+                sources.get(event_id, []),
+                languages.get(event_id, []),
+                event_subjects,
+                companies.get(event_id, []),
+            ),
+            "external_rankings": rankings[event_id],
+            **native_list_evidence(rankings[event_id]),
+            "best_native_rank": best[event_id],
+            "latest_seen_at": _iso(max(observations[event_id])),
+            "topics": [
+                subject
+                for subject in event_subjects
+                if subject["subject_type"] != str(SubjectType.EVENT)
+            ],
+            "summary": summaries.get(event_id),
+        }
+        if explain:
+            signal = rank_signal(best[event_id])
+            bonus = publisher_bonus(publishers[event_id])
+            card["ordering_inputs"] = {
+                "best_native_rank": best[event_id],
+                "native_publisher_count": publishers[event_id],
+                "rank_signal": round(float(signal), 4),
+                "publisher_bonus": round(float(bonus), 4),
+                "ordering_value": round(float(signal + bonus), 4),
+                "latest_report_at": _iso(events[event_id].last_published_at),
             }
-        )
+        items.append(card)
     return {**result, "total": len(order), "items": items}
 
 
-def trending(session, domain=None, limit=DEFAULT_LIMIT, selection="native"):
+def trending(session, domain=None, limit=DEFAULT_LIMIT, view="aggregate"):
     domains = [domain] if domain else [str(value) for value in Domain]
     return {
         "generated_at": datetime.now(UTC),
-        "domains": [
-            domain_trending(session, value, limit, selection=selection) for value in domains
-        ],
+        "domains": [domain_trending(session, value, limit, view=view) for value in domains],
     }
+
+
+def render_order(domains):
+    """Plain-text debug listing of aggregate Trending with the internal ordering inputs."""
+
+    lines = []
+    for result in domains:
+        eligibility = result.get("eligibility", {})
+        lines.append(
+            f"{result['domain']}: {result['ordering']} · {result['total']} eligible · "
+            f"{eligibility.get('excluded_count', 0)} older than "
+            f"{eligibility.get('max_report_age_hours', '-')} h excluded"
+        )
+        for position, card in enumerate(result["items"], 1):
+            inputs = card.get("ordering_inputs", {})
+            ranks = ", ".join(f"{r['source']} #{r['rank']}" for r in card["external_rankings"])
+            lines.append(
+                f"  {position:>2}. {card['event']['canonical_title'][:70]}\n"
+                f"      {card['event']['id']} · {ranks} · publishers "
+                f"{card['native_publisher_count']} · seen {card['latest_seen_at']} · report "
+                f"{inputs.get('latest_report_at')} · value {inputs.get('ordering_value')} "
+                f"(signal {inputs.get('rank_signal')} + bonus {inputs.get('publisher_bonus')})"
+            )
+    return "\n".join(lines)

@@ -95,6 +95,11 @@ def main():
     health = sub.add_parser("source-health")
     # Read-only: health of every automatic source from recorded attempts; no network request.
     health.add_argument("--json", action="store_true")
+    trending_order = sub.add_parser("trending-order")
+    # Read-only debug view of the aggregate Trending order with its internal ordering inputs.
+    trending_order.add_argument("--domain", choices=[str(value) for value in Domain])
+    trending_order.add_argument("--limit", type=int, default=10)
+    trending_order.add_argument("--json", action="store_true")
     freshness = sub.add_parser("update-freshness")
     # Read-only: exit 0 when a successful intelligence-update started within the window, else 1.
     freshness.add_argument("--max-age-hours", type=float, default=26)
@@ -260,6 +265,27 @@ def main():
                 print(json.dumps(report, indent=2, ensure_ascii=False))
             else:
                 print(render_text(report))
+            raise SystemExit(0)
+        elif args.command == "trending-order":
+            from sqlalchemy import text
+
+            from industry_intelligence.services.trending import domain_trending, render_order
+
+            session = factory()
+            try:
+                session.execute(text("SET TRANSACTION READ ONLY"))
+                domains = [args.domain] if args.domain else [str(value) for value in Domain]
+                report = [
+                    domain_trending(session, value, args.limit, summaries=False, explain=True)
+                    for value in domains
+                ]
+            finally:
+                session.rollback()
+                session.close()
+            if args.json:
+                print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+            else:
+                print(render_order(report))
             raise SystemExit(0)
         elif args.command == "update-freshness":
             from datetime import timedelta

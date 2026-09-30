@@ -13,8 +13,10 @@ planned or speculative results in a finished entry.
 ## Permanent Development Rules
 
 - External Rankings != Our Opinion: a publisher's native rank is stored and shown exactly as
-  published; the platform never creates popularity, trend, hotness, weighted, combined, or AI
-  scores, and never compares ranks from different publishers.
+  published and stays the source evidence; the platform never creates a user-facing popularity,
+  trend, hotness, weighted, combined, or AI score. Since Trending-3 it may compute one simple,
+  deterministic cross-source *presentation order* for canonical Events (never returned as a
+  value, never shown as a score or platform rank, never replacing the native ranks shown).
 - AI != Canonical Truth. Evidence / Source First. Precision > Coverage.
 - Domains are Computer, Finance, and Gaming. Finance is industry and market news and events,
   never stock recommendations, stock-ranking products, or investment advice.
@@ -32,12 +34,14 @@ planned or speculative results in a finished entry.
 
 ## Current Baseline
 
-- Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1, Product-1, Trending-2).
-- Backend: pytest 867 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
-  `industry_intelligence_test`; unit 648; Ruff check and format check clean (after Trending-2).
+- Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1, Product-1, Trending-2,
+  Trending-3).
+- Backend: pytest 875 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
+  `industry_intelligence_test`; unit 654; Ruff check and format check clean (after Trending-3).
 - Frontend: ESLint, TypeScript, and the Next.js production build (11 routes) pass.
 - Live dev database: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health`
-  30/30 healthy (25 earlier sources + 5 publisher ranked lists).
+  29/30 healthy after the Trending-3 run (`eastmoney_turnover` failed once with an upstream
+  network error; the five publisher ranked lists are healthy).
 - Local runtime: native PostgreSQL 16 (Local-1); daily launchd `intelligence-update --skip-ai`
   at 10:00 Australia/Sydney (bounded AI was enabled by Product-1 and rolled back by Product-1.1).
 
@@ -1127,3 +1131,201 @@ The order is not a platform popularity score."), `app/trending/page.tsx` (each l
 
 Review Finance and 3DM movement after the next scheduled runs; consider an "Across Multiple
 Lists" filter once multi-list Events occur live.
+
+## 2026-09-30 — Trending-3 — Multi-source Event Aggregation & Ordering
+
+Status: complete (2026-09-30). No migration. Scheduled AI stays `--skip-ai`; no provider request.
+
+### Goal
+
+Turn `/trending` (and Home) into one current, Event-centric view per domain: the Events that the
+selected publishers' own hot lists point to, deduplicated by canonical Event, in one simple,
+explainable cross-source presentation order, with every publisher rank kept visible as the
+evidence. Not historical trend analysis, not AI, no new publishers.
+
+### Start state
+
+- Branch `phase-7` at `32f8fba` ("feat: add native rank movement and source-diverse Trending"),
+  clean tree, no remote. Alembic current = head = `20260930_12`.
+- Baseline (actual, rerun first): pytest **867 passed, 1 skipped** (isolated
+  `industry_intelligence_test`); Ruff check clean, Ruff format check clean (181 files);
+  `data-quality-audit` 0 errors / 0 warnings / 6 info; ESLint, TypeScript, and the Next.js
+  production build (11 routes, isolated copy) pass. Scheduler `AI_ARGS = ["--skip-ai"]`.
+- Query baseline (dev DB, `trending(domain, 20)`): computer 20, finance 17, gaming 17 statements;
+  Home (`limit=4, selection=home`) 19 / 16 / 16.
+
+### Live source audit (read-only, before any design)
+
+Source set frozen as is: Hacker News · Top Stories (computer), 新浪财经 · 点击量排行 and 东方财富 ·
+网友点击排行榜 (finance), Gematsu · Popular Posts and 3DM · 近期热门 (gaming). Current snapshot sizes:
+HN 30 (our tracked prefix of the 500-item list), 新浪财经 20, 东方财富 10, Gematsu 4, 3DM 8 — each a
+prefix of a far larger article set (the publisher's widget size or our tracked depth). Unique
+Events: computer 30, finance 30, gaming 12; Events on >1 list: **0** in every domain; cards with
+>1 article: 0; pending (unassigned) articles: 0. Report age at list observation: computer <6 h 5,
+<24 h 19, <48 h 3, 3–7 d 3 (HN #19 81 h, #28 64 h, #16 55 h); finance all <24 h (东方财富 up to
+23.5 h); gaming 3 within 48 h, 3DM #1/#2/#3/#5/#6/#7 52–137 h (4 of them tech items such as 小米,
+Windows, 光刻机).
+
+### Aggregation design
+
+- Architecture unchanged: ranked list → ranked ContentItem → existing `EventContentLink` →
+  canonical Event → Trending. No new Event type, no second clustering, no AI. Two articles become
+  one card only when they already belong to one canonical Event.
+- `view=aggregate` (new default for `/trending` and Home) and `view=native` (the Trending-1/2
+  catalog order, kept for evidence and debugging). Both from the same `domain_trending`.
+- Eligibility (filter, not a decay term): the Trending-2 Home rule, now for the whole aggregate
+  view — the Event's latest report at most 48 h before the most recent list observation that
+  lists it. Excluded Events are counted (`eligibility.excluded_count`) and stay in `view=native`.
+- Order (pure `aggregate_order`), current snapshots only (no movement, no history):
+
+  ```
+  rank_signal(r)     = (30 + 1 - min(r, 30)) / 30          # #1 = 1.0, each place 1/30 lower
+  publisher_bonus(p) = 0.10 × min(p - 1, 2)                # per additional independent publisher
+  ordering_value     = rank_signal(best native rank) + publisher_bonus(publishers)
+  ties: more publishers → better best rank → newer latest report → Event ID
+  ```
+
+  Equivalently: an Event is placed by its best publisher rank, and each additional publisher that
+  lists it moves it up three places (at most six). Exact arithmetic (`Fraction`), so ties are
+  real ties. Publishers are counted by publisher name, not by list, so one publisher's several
+  lists cannot multiply its weight; all list evidence stays on the card.
+- The value is internal: not returned by the API, not shown in the UI, not a score. The CLI
+  `trending-order [--domain] [--limit] [--json]` (read-only transaction) prints each position with
+  its inputs for auditing. The Product-1 AI selector (disabled) is pinned to `view=native`, so its
+  selection is unchanged.
+
+### Why this rule / rejected alternatives
+
+- **List-length normalisation `(N + 1 − r) / N` — rejected after the audit.** List length is the
+  widget size or our tracked prefix, not the population, so it would penalise short lists: Gematsu
+  #4 of 4 = 0.25 would sit below 3DM #6 of 8 = 0.375, and on the live Finance data 新浪财经 (20
+  rows) would take 6 of the top 10 and 13 of the top 20 against 东方财富 (10 rows) purely because
+  its list is longer — the monopoly §14 warns about. The shared depth scale treats "#k on its
+  publisher's list" alike and gives Finance 5 / 5 and 10 / 10. Both agree on Case D (a Top 10 #5
+  stays ahead of a Top 30 #15).
+- **Reciprocal rank 1/r** — steep at the top (#2 = 0.5), so any fixed bonus is either negligible
+  or overwhelming; not simpler to explain.
+- **Summing rank contributions over lists** — lets many low ranks overwhelm a clear #1 (Case C).
+- **Freshness decay term** — a 48 h cut-off already separates live data cleanly (3DM's multi-day
+  posts vs everything else); a continuous term would be an unexplainable score component.
+- **Post-ranking publisher cap / interleave** — not needed: with the shared scale Finance
+  interleaves 东方财富 / 新浪财经 naturally; Gaming top 4 is Gematsu 3 / 3DM 1 because 3DM's #1
+  and #2 are 52–137 h old (evidence, not unfairness); Computer has one publisher.
+- **Keeping Home's round-robin** — rejected: on the same data it put 3DM #8 before Gematsu #2
+  (Gaming Home: Gematsu #1, 3DM #3, Gematsu #2, 3DM #8), ignoring native rank; the aggregate
+  gives Gematsu #1, #2, #3, 3DM #3. For Computer and Finance the two orders select the same
+  Events at every even prefix. Home now reads the aggregate view (one definition of Trending).
+
+### Files changed
+
+- `backend/src/industry_intelligence/services/trending.py`: module docstring; `VIEWS`,
+  `SELECTION_VIEWS`, `AGGREGATE_ORDERING`, `REFERENCE_DEPTH`, `PUBLISHER_BONUS`,
+  `MAX_BONUS_PUBLISHERS`, `MAX_REPORT_AGE`, `ELIGIBILITY_RULE`; `current_eligible` (was
+  `home_eligible`), `rank_signal`, `publisher_bonus`, `ordering_value`, `aggregate_order`,
+  `render_order`; `domain_trending(..., view=, explain=)`, `trending(..., view=)`; per-card
+  `best_native_rank`, `latest_seen_at`; per-domain `view`, `eligibility`. Removed
+  `home_round_robin`, `HOME_*` constants, and `selection`.
+- `api/sources.py`: `view=aggregate|native` (default aggregate); `selection=home|native` kept as
+  an alias (home → aggregate, native → native); anything else 422.
+- `cli.py`: `trending-order`. `services/ai_enrichment.py`: `view="native"` (unchanged selection).
+- Frontend: `lib/api.ts` (`TrendingView`, `TrendingEligibility`, new card fields, `fetchTrending`
+  `view`), `lib/i18n.tsx` ("Seen on N publisher lists" / "同时出现在 N 个来源榜单"),
+  `components/shared.tsx` (`TrendingEventCard` `showMovement`, off by default),
+  `app/trending/page.tsx` (Combined | By publisher list switch with `?view=native`, new intro
+  and methodology, excluded-count note with a link to the list view; movement badges and
+  "movement vs." only in the list view), `app/page.tsx` (Home reads the aggregate view; note
+  rewritten), `app/globals.css` (switch and inline-link styles).
+- Tests: new `tests/unit/test_trending_aggregate.py`; updated `test_trending_movement.py`,
+  `tests/integration/test_trending_postgres.py`, `test_product1_postgres.py` (fake accepts
+  `view`).
+- Docs: this entry, `AGENTS.md`, `CLAUDE.md`, `README.md`.
+
+### Migration
+
+None. Everything is derived on read from the existing `IngestionBatch` snapshots; no score is
+persisted.
+
+### Tests
+
+- `tests/unit/test_trending_aggregate.py` (9): shared scale bounded/monotonic/floored; bonus per
+  additional publisher and cap; Case A (single source follows native rank); Case B (#2 + a second
+  publisher > single #1; #5 + second publisher < #1; #4 + second publisher ties #1 and wins on
+  publishers); Case C (#9 + #9, even three publishers, stays below #1 and #2); Case D (Top 10 #5 >
+  Top 30 #15; a short list's #4 equals a long list's #4); Case E (48 h boundary, stricter latest
+  observation, missing times); Case F (one publisher: native order kept); deterministic ties.
+- `tests/integration/test_trending_postgres.py`: Case G (two articles of one canonical Event on
+  two publishers → one card with both ranks, placed before a single #1; `ordering_inputs` only
+  with `explain`, and `render_order`); Case H (two similar headlines that are different Events
+  stay two cards, no bonus); Home and `/trending` share the aggregate order and skip a 3-day-old
+  Event that the native view keeps; fewer cards when few are current; API `view` validated (422)
+  and `selection` alias equal to the default; unavailable domain; query count constant for both
+  views and equal between them. Native-order assertions now request `view="native"`.
+- Results: pytest **875 passed, 1 skipped** (unit 654); Ruff check clean, format check clean (182
+  files); ESLint, TypeScript, Next.js production build (11 routes, isolated copy) pass.
+
+### Performance
+
+The order is computed in memory from the rows already loaded (no query per Event or per article).
+Dev DB after the live run (same data for both views): `/trending` (limit 20) aggregate 18 / 17 /
+16 statements, native 18 / 17 / 16; Home (limit 4) 16 / 16 / 15 (before: 20 / 17 / 17 and 19 / 16
+/ 16 on the pre-run data). A PostgreSQL test pins that the count does not grow from 3 to 12 listed
+articles, for both views.
+
+### Live verification
+
+- Backup first (`pg_dump -Fc`, 35 table-data entries, mode 600). Then the normal daily command
+  `intelligence-update --skip-ai` (run `20260930T123922Z-5437d19c`): **DEGRADED, exit 3** only
+  because `eastmoney_turnover` (A-share turnover chart, not a Trending source) failed with a
+  transport error (`RemoteProtocolError`); rankings 11/12, company rankings 3/3, content 15/15
+  (all five ranked lists), 176 new ContentItems and 176 new Events, links unchanged, AI skipped,
+  postcheck audit 0/0.
+- Aggregate Top 10 (`trending-order`):
+  - Computer (29 eligible, 1 excluded: HN #29 "NAND-16" from 2026-09-27): HN #1 "Pi.dev: You Said
+    No MCP" (`09495ea5`), #2 "Show HN: JBR-001" (`6ae56b10`), #3 "Livenerf: Has Opus 5.5 been
+    nerfed yet?" (`3ba91f98`), #4 "Solving Factorio Quality", #5 data-centre water/electricity,
+    #6 "Dots: Always-on agents", #7, #8, #9, #10 "America.gov" — HN order, values 1.0 … 0.7.
+  - Finance (30 eligible): 东方财富 #1 统计局 9月PMI 50.1% (`fccafd4d`) and 新浪财经 #1 "A股利好！又一批增持
+    回购来了" (`d4863980`) tie at 1.0 (newer report first: 01:30Z vs 00:27Z), then 新浪财经 #2 伊拉克
+    (`9c492bf1`), 东方财富 #2 首套房贴息 (`0c0121e7`), 新浪财经 #3 东航 witness (`ce44d4c1`), 东方财富
+    #3 易会满 (`b41d2a71`), 新浪财经 #4, 东方财富 #4, 东方财富 #5, 新浪财经 #5 — 5 / 5 per publisher.
+  - Gaming (6 eligible, 6 excluded): Gematsu #1 Gundam Battle Operation 3 (`37643076`), Gematsu
+    #2 Satisfactory (`68994249`), Gematsu #3 Mythic Achievements (`749b1f1d`), 3DM #3 《巫师3：狂猎
+    重制版》现已推出 (`b70a75df`; ties Gematsu #3 at 0.9333 and follows it because Gematsu's report
+    is newer, 16:16Z vs 10:42Z), Gematsu #4 Intergalactic (`33be2359`), 3DM #8 《巫师3：重制版》今天发售
+    (`8689d65c`).
+- Old vs new on the same data: duplicates — none existed live (0 multi-article cards); multi-source
+  consolidation — no live Event is on two lists (the aggregate path is covered by Case G); one
+  source dominating — Finance native was 新浪财经 10 / 10 in the top 10, aggregate 5 / 5
+  (length-normalised alternative would be 6 / 4); stale filtering — the six 3DM rows 52–137 h old
+  and HN #29 are excluded and remain in the list view; high native ranks respected — every domain
+  follows native rank, and the round-robin inversion (3DM #8 before Gematsu #2) is gone. Canonical
+  separation observed live: the two Witcher 3 remaster articles (3DM #3, #8) and the two 东航
+  articles (新浪财经 #3, #5) are different Events and stay separate cards; Trending does not group
+  them.
+- Browser (isolated production build on 3090 against the API on 8090, live DB): `/trending`
+  Gaming/Finance in English at 1280 px and Gaming/Finance in 简体中文 at 375 px, Combined ↔ By
+  publisher list (URL `?view=native`, back/forward), excluded note and link, movement badges only
+  in the list view, headline → `/event/fccafd4d…`; Home 4 + 4 + 4 cards, 12 distinct Events, same
+  order as `/trending`; Event Detail at 375 px; no horizontal overflow anywhere; the multi-source
+  card (two chips + "同时出现在 2 个来源榜单") was checked at 375 px by rewriting one API response
+  in the page (display only); console errors 0 (only aborted Next.js prefetches); the browser
+  contacted only `localhost:3090` / `8090`; API log GET only; no row written after the run.
+- After: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health` 29 healthy, 1
+  failing (`eastmoney_turnover`, 1/1, transport); launchd `AI_ARGS = ["--skip-ai"]`; production
+  systemd `intelligence-update --skip-ai`.
+
+### Known limitations
+
+- No live Event is on two publishers' lists yet, so the corroboration bonus is exercised by tests
+  only; its size (three places per publisher) is a judgement to revisit once such Events occur.
+- The 48 h rule removes most of 3DM 近期热门 (a multi-day list); Gaming shows 6 Events today.
+- The shared depth (30) is the deepest tracked list; a deeper list would share the floor below
+  #30 (none exists).
+- Ties across publishers go to the newer report, so which #1 comes first can change between runs.
+- Canonical Event grouping is unchanged: related reports that are separate Events (Witcher 3
+  remaster, 东航) appear as separate cards.
+
+### Next step
+
+Watch for the first live multi-publisher Event and check that its placement reads as intended;
+then consider whether Finance needs more native lists before any change to the constants.

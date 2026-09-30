@@ -103,19 +103,26 @@ export interface TrendingEventItem {
   summary: EventCardSummary | null;
   /** Distinct publisher lists / publishers listing the Event: descriptive evidence only. */
   native_list_count: number; native_publisher_count: number; native_publishers: string[];
+  /** Best (lowest) publisher-native rank among its listings, and the latest list observation listing it. */
+  best_native_rank: number; latest_seen_at: string;
 }
 /**
- * `selection=home` (Home only): Events whose latest report is at most `max_report_age_hours` older
- * than the list observation, one list at a time in each list's own order, each Event once. A
- * presentation sample, not an overall rank.
+ * `view=aggregate` only: Events whose latest report is at most `max_report_age_hours` older than the
+ * list observation that lists them; older listed Events are counted in `excluded_count`.
  */
-export interface HomeEligibility {
+export interface TrendingEligibility {
   rule: string; max_report_age_hours: number; eligible_count: number; excluded_count: number;
 }
+/**
+ * Trending-3. `aggregate` (default; /trending and Home): current Events in one presentation order derived
+ * from their native ranks (best rank, then a small bonus per additional publisher); no score is returned.
+ * `native`: the publisher lists in catalog order, each in its own order, with no age filter.
+ */
+export type TrendingView = "aggregate" | "native";
 export interface TrendingDomain {
-  domain: Domain; status: "ready" | "unavailable"; selection: "native" | "home"; ordering: string;
+  domain: Domain; status: "ready" | "unavailable"; view: TrendingView; ordering: string;
   lists: TrendingList[]; total: number; items: TrendingEventItem[];
-  home_eligibility?: HomeEligibility;
+  eligibility?: TrendingEligibility;
 }
 export interface TrendingResponse {
   generated_at: string;
@@ -387,7 +394,7 @@ export function fetchToday(signal?: AbortSignal): Promise<TodayResponse> {
 }
 
 export function fetchTrending(
-  signal?: AbortSignal, options: {domain?: Domain; limit?: number; selection?: "native" | "home"} = {},
+  signal?: AbortSignal, options: {domain?: Domain; limit?: number; view?: TrendingView} = {},
 ): Promise<TrendingResponse> {
   return getJson("/api/v1/trending", options, signal);
 }

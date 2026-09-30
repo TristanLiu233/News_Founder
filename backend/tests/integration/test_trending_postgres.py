@@ -367,7 +367,7 @@ def _event_of(db, content):
 def test_trending_is_event_centric_with_every_native_rank_kept(db, registry):
     ids, game, story = _world(db, registry)
     assert _event_of(db, ids["b"]) == _event_of(db, ids["b2"])
-    result = trending(db, "gaming")
+    result = trending(db, "gaming", view="native")
     gaming = result["domains"][0]
     assert gaming["status"] == "ready"
     assert gaming["ordering"] == "list_catalog_order_then_native_rank"
@@ -400,17 +400,81 @@ def test_trending_is_event_centric_with_every_native_rank_kept(db, registry):
     assert "rank" not in a_card and "rank" not in a_card["event"]
 
 
+def test_aggregate_view_consolidates_one_canonical_event_and_puts_corroboration_first(db, registry):
+    ids, _, _ = _world(db, registry)
+    gaming = trending(db, "gaming")["domains"][0]
+    assert gaming["view"] == "aggregate"
+    assert gaming["ordering"] == "best_native_rank_plus_publisher_bonus"
+    # Case G: B's two articles (Popular #2, 近期热门 #1) are one canonical Event, so one card
+    # with both ranks; listed by two publishers, it comes before A (Popular #1 only), then D (#3).
+    assert [row["event"]["id"] for row in gaming["items"]] == [
+        str(_event_of(db, ids["b"])),
+        str(_event_of(db, ids["a"])),
+        str(_event_of(db, ids["d"])),
+    ]
+    b_card = gaming["items"][0]
+    assert [r["rank"] for r in b_card["external_rankings"]] == [2, 1]
+    assert (b_card["best_native_rank"], b_card["native_publisher_count"]) == (1, 2)
+    assert b_card["latest_seen_at"] == T0.isoformat()
+    assert gaming["eligibility"] == {
+        "rule": "latest_report_within_hours_of_list_observation",
+        "max_report_age_hours": 48,
+        "eligible_count": 3,
+        "excluded_count": 0,
+    }
+    # The internal ordering value is never part of the response; only the debug CLI sees it.
+    assert "ordering_inputs" not in b_card
+    explained = trending_service.domain_trending(db, "gaming", summaries=False, explain=True)
+    assert explained["items"][0]["ordering_inputs"] == {
+        "best_native_rank": 1,
+        "native_publisher_count": 2,
+        "rank_signal": 1.0,
+        "publisher_bonus": 0.1,
+        "ordering_value": 1.1,
+        "latest_report_at": T0.isoformat(),
+    }
+    text = trending_service.render_order([explained])
+    assert "value 1.1 (signal 1.0 + bonus 0.1)" in text and "3 eligible" in text
+    assert not keys_of(gaming) & (FORBIDDEN | {"ordering_value", "rank_signal"})
+
+
+def test_similar_articles_of_different_events_stay_separate_cards(db, registry):
+    popular, hot = registry["lists"]["t_popular"], registry["lists"]["t_hot"]
+    base_p, base_h = popular.url.rstrip("/"), hot.url.rstrip("/")
+    persist_news_ranking(
+        db, popular, [ranked(1, f"{base_p}/two", "Harbor Lights sells 2 million copies")], "run:1"
+    )
+    persist_news_ranking(
+        db, hot, [ranked(1, f"{base_h}/three", "Harbor Lights sells 3 million copies")], "run:1"
+    )
+    ids = [content_id(db, f"{base_p}/two"), content_id(db, f"{base_h}/three")]
+    build_events(db, content_ids=ids)
+    assert _event_of(db, ids[0]) != _event_of(db, ids[1])
+    # Case H: Trending never groups by itself; two canonical Events are two cards, no bonus.
+    cards = trending(db, "gaming")["domains"][0]["items"]
+    assert len(cards) == 2
+    assert [card["native_publisher_count"] for card in cards] == [1, 1]
+
+
 def test_domain_without_a_ranked_snapshot_is_unavailable(db, registry):
     finance = trending(db, "finance")["domains"][0]
     assert finance == {
         "domain": "finance",
         "status": "unavailable",
-        "selection": "native",
-        "ordering": "list_catalog_order_then_native_rank",
+        "view": "aggregate",
+        "ordering": "best_native_rank_plus_publisher_bonus",
         "lists": [],
+        "eligibility": {
+            "rule": "latest_report_within_hours_of_list_observation",
+            "max_report_age_hours": 48,
+            "eligible_count": 0,
+            "excluded_count": 0,
+        },
         "total": 0,
         "items": [],
     }
+    native = trending(db, "finance", view="native")["domains"][0]
+    assert native["view"] == "native" and "eligibility" not in native
 
 
 def test_reviewed_merge_resolves_to_one_canonical_card(db, registry):
@@ -445,6 +509,9 @@ def test_trending_api_is_event_centric(db, registry):
         "native_list_count",
         "native_publisher_count",
         "native_publishers",
+        # Trending-3: descriptive evidence behind the aggregate order.
+        "best_native_rank",
+        "latest_seen_at",
     }
     # Product-1: the listed articles carry no excerpt and no AI exists, so there is no summary.
     assert card["summary"] is None
@@ -753,7 +820,7 @@ def test_rank_movement_compares_only_the_same_list(db, registry):
     # The other list has one snapshot only: its ranks are never compared with Popular Posts.
     ids |= _snapshot(db, hot, [(1, "p8", T0), (2, "h2", T0)], "run:2", t1)
     build_events(db, content_ids=list(ids.values()))
-    gaming = trending(db, "gaming", limit=None)["domains"][0]
+    gaming = trending(db, "gaming", limit=None, view="native")["domains"][0]
     lists = {row["source_key"]: row for row in gaming["lists"]}
     assert lists["t_popular"]["movement_comparable"] is True
     assert lists["t_popular"]["previous_observed_at"] == T0.isoformat()
@@ -848,62 +915,65 @@ def _home_world(db, registry):
     return {key: str(_event_of(db, value)) for key, value in ids.items()}
 
 
-def test_home_selection_alternates_lists_dedupes_and_skips_old_events(db, registry):
+def test_home_and_trending_share_the_aggregate_order_and_skip_old_events(db, registry):
     events = _home_world(db, registry)
-    home = trending(db, "gaming", limit=4, selection="home")["domains"][0]
-    assert home["selection"] == "home" and home["ordering"] == "home_list_round_robin"
-    # Popular #1, 近期热门 #1 (= X), Popular #2 is X again → Popular #3, then 近期热门 #3
-    # (#2 is three days old and not Home-eligible).
-    assert [card["event"]["id"] for card in home["items"]] == [
-        events["a"],
-        events["x"],
-        events["b"],
-        events["c"],
-    ]
-    x_card = home["items"][1]
+    home = trending(db, "gaming", limit=4)["domains"][0]
+    assert home["view"] == "aggregate"
+    # X (近期热门 #1 + Popular #2, two publishers) first, then A (Popular #1); B and C are both
+    # #3 on their lists (a tie resolved by Event ID); D is #4; OLD (三天前) is not eligible.
+    shown = [card["event"]["id"] for card in home["items"]]
+    assert shown[:2] == [events["x"], events["a"]]
+    assert shown[2:] == sorted([events["b"], events["c"]])
+    full = trending(db, "gaming", limit=None)["domains"][0]
+    assert [card["event"]["id"] for card in full["items"]] == [*shown, events["d"]]
+    x_card = home["items"][0]
     assert [(r["source_key"], r["rank"]) for r in x_card["external_rankings"]] == [
         ("t_popular", 2),
         ("t_hot", 1),
     ]
     assert x_card["native_list_count"] == 2
-    assert home["home_eligibility"] == {
+    assert home["eligibility"] == {
         "rule": "latest_report_within_hours_of_list_observation",
         "max_report_age_hours": 48,
         "eligible_count": 5,
         "excluded_count": 1,
     }
     assert home["total"] == 5
-    # /trending still shows the old Event at its native rank; the Home rule never touches it.
-    native = trending(db, "gaming", limit=None)["domains"][0]
+    # The native view still shows the old Event at its native rank; eligibility never touches it.
+    native = trending(db, "gaming", limit=None, view="native")["domains"][0]
     assert events["old"] in [card["event"]["id"] for card in native["items"]]
     assert native["ordering"] == "list_catalog_order_then_native_rank"
-    assert "home_eligibility" not in native
+    assert "eligibility" not in native
     assert not keys_of(home) & FORBIDDEN
 
 
-def test_home_shows_fewer_cards_when_too_few_events_are_recent(db, registry):
+def test_aggregate_shows_fewer_cards_when_too_few_events_are_recent(db, registry):
     popular = registry["lists"]["t_popular"]
     old = T0 - timedelta(days=5)
     ids = _snapshot(db, popular, [(1, "o1", old), (2, "f1", T0), (3, "o2", old)], "run:1", T0)
     build_events(db, content_ids=list(ids.values()))
-    home = trending(db, "gaming", limit=4, selection="home")["domains"][0]
+    home = trending(db, "gaming", limit=4)["domains"][0]
     assert [card["external_rankings"][0]["rank"] for card in home["items"]] == [2]
-    assert home["total"] == 1 and home["home_eligibility"]["excluded_count"] == 2
+    assert home["total"] == 1 and home["eligibility"]["excluded_count"] == 2
 
 
-def test_trending_api_selection_is_additive_and_validated(db, registry):
+def test_trending_api_views_are_validated_and_selection_is_an_alias(db, registry):
     _home_world(db, registry)
     app = create_app(get_settings())
     app.dependency_overrides[get_db_session] = lambda: db
     with TestClient(app) as client:
-        home = client.get(
-            "/api/v1/trending", params={"domain": "gaming", "limit": 4, "selection": "home"}
-        )
-        native = client.get("/api/v1/trending", params={"domain": "gaming"}).json()
-        assert client.get("/api/v1/trending", params={"selection": "score"}).status_code == 422
+        get = client.get
+        default = get("/api/v1/trending", params={"domain": "gaming", "limit": 4}).json()
+        home = get("/api/v1/trending", params={"domain": "gaming", "limit": 4, "selection": "home"})
+        native = get("/api/v1/trending", params={"domain": "gaming", "view": "native"}).json()
+        legacy = get("/api/v1/trending", params={"domain": "gaming", "selection": "native"}).json()
+        assert get("/api/v1/trending", params={"selection": "score"}).status_code == 422
+        assert get("/api/v1/trending", params={"view": "score"}).status_code == 422
     assert home.status_code == 200
     body = home.json()["domains"][0]
-    assert len(body["items"]) == 4 and body["home_eligibility"]["max_report_age_hours"] == 48
+    assert body == default["domains"][0]
+    assert len(body["items"]) == 4 and body["eligibility"]["max_report_age_hours"] == 48
+    assert native["domains"][0]["view"] == legacy["domains"][0]["view"] == "native"
     ranking = native["domains"][0]["items"][0]["external_rankings"][0]
     assert {
         "rank",
@@ -926,19 +996,21 @@ def test_trending_query_count_does_not_grow_with_listed_articles(db, registry, c
     def count(*_args):
         statements.append(1)
 
-    def measure():
+    def measure(view):
         statements.clear()
         sa_event.listen(connection, "before_cursor_execute", count)
         try:
-            trending_service.domain_trending(db, "gaming", limit=None, summaries=False)
+            trending_service.domain_trending(db, "gaming", limit=None, summaries=False, view=view)
         finally:
             sa_event.remove(connection, "before_cursor_execute", count)
         return len(statements)
 
     ids = _snapshot(db, popular, [(r, f"q{r}", T0) for r in range(1, 4)], "run:1", T0)
     build_events(db, content_ids=list(ids.values()))
-    small = measure()
+    small = {view: measure(view) for view in ("aggregate", "native")}
     t1 = T0 + timedelta(hours=1)
     ids = _snapshot(db, popular, [(r, f"q{r}", T0) for r in range(1, 13)], "run:2", t1)
     build_events(db, content_ids=list(ids.values()))
-    assert measure() == small
+    # The aggregate order is computed in memory: no query per Event or per listed article.
+    assert {view: measure(view) for view in ("aggregate", "native")} == small
+    assert small["aggregate"] == small["native"]

@@ -52,7 +52,7 @@ export const common = {
       reentered: "Back on this list after dropping off",
     },
     newBadge: "NEW", backBadge: "BACK",
-    onLists: (lists: number, publishers: number) => `On ${lists} publisher lists${publishers !== lists ? ` from ${publishers} ${publishers === 1 ? "publisher" : "publishers"}` : ""}`,
+    onLists: (lists: number, publishers: number) => publishers === lists ? `Seen on ${lists} publisher lists` : `Seen on ${lists} lists from ${publishers} ${publishers === 1 ? "publisher" : "publishers"}`,
     relatedTopics: "Related topics",
     /** The publisher's own daily list (e.g. Sina `top_type=day`) for a Beijing calendar date; never a rolling 24 h window. */
     dailyList: (date: string) => `daily list, Beijing date ${date}`,
@@ -102,7 +102,7 @@ export const common = {
       reentered: "曾跌出该榜单，现重新上榜",
     },
     newBadge: "新上榜", backBadge: "重新上榜",
-    onLists: (lists: number, publishers: number) => `登上 ${lists} 个发布方榜单${publishers !== lists ? `（${publishers} 个发布方）` : ""}`,
+    onLists: (lists: number, publishers: number) => publishers === lists ? `同时出现在 ${lists} 个来源榜单` : `同时出现在 ${lists} 个榜单（${publishers} 个发布方）`,
     relatedTopics: "相关主题",
     dailyList: (date: string) => `日榜，北京时间 ${date}`,
     companyTag: "公司",
