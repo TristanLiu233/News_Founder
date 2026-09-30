@@ -21,7 +21,7 @@ def wrapper():
     return module
 
 
-def test_runs_only_the_bounded_ai_update_from_backend(wrapper, monkeypatch):
+def test_runs_only_the_skip_ai_update_from_backend(wrapper, monkeypatch):
     calls = []
 
     def run(command, **kwargs):
@@ -33,19 +33,11 @@ def test_runs_only_the_bounded_ai_update_from_backend(wrapper, monkeypatch):
 
     assert wrapper.main([]) == 3
     [(command, kwargs)] = calls
-    assert command[1:] == [
-        "-m",
-        "industry_intelligence.cli",
-        "intelligence-update",
-        "--ai-limit",
-        "12",
-    ]
+    # Product-1.1: scheduled AI rolled back after the fresh live quality gate failed.
+    assert command[1:] == ["-m", "industry_intelligence.cli", "intelligence-update", "--skip-ai"]
     assert kwargs["cwd"] == wrapper.ROOT / "backend"
     assert sorted(kwargs["env"]) == ["HOME", "LANG", "PATH", "PYTHONUNBUFFERED"]
-    # Bounded: the cap is within the CLI's hard limit; the plan preflight is read-only.
-    from industry_intelligence.cli import _ai_event_cap
-
-    assert _ai_event_cap(command[-1]) == 12 and "--skip-ai" not in command
+    assert "--ai-limit" not in command
 
 
 def test_refuses_outside_sydney_without_running(wrapper, monkeypatch, capsys):
@@ -66,3 +58,22 @@ def test_plist_template_schedules_10_00_with_the_wrapper():
         "__PROJECT_ROOT__/ops/scheduler/daily_update.py",
     ]
     assert plist["StandardOutPath"] == plist["StandardErrorPath"]
+
+
+def test_bounded_ai_is_one_setting_away_and_stays_capped(wrapper, monkeypatch):
+    """Re-enabling scheduled AI (only after a zero-finding live quality smoke) is
+    ``AI_ARGS = ["--ai-limit", "12"]``; the cap stays within the CLI's hard limit."""
+
+    from industry_intelligence.cli import _ai_event_cap
+
+    calls = []
+    monkeypatch.setattr(wrapper, "system_zone", lambda: "Australia/Sydney")
+    monkeypatch.setattr(wrapper, "AI_ARGS", ["--ai-limit", "12"])
+    monkeypatch.setattr(
+        wrapper.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command) or SimpleNamespace(returncode=0),
+    )
+    assert wrapper.main(["--plan"]) == 0
+    assert calls[0][3:] == ["intelligence-update", "--ai-limit", "12", "--plan"]
+    assert _ai_event_cap(calls[0][5]) == 12

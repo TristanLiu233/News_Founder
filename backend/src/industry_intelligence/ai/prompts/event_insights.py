@@ -152,7 +152,57 @@ Do not add sequence words such as earlier, later, before, after, following, subs
     output_model=WhyItMattersOutput,
 )
 
-INSIGHT_PROMPTS = {spec.artifact_type: spec for spec in (EVENT_SUMMARY_V4, EVENT_WHY_IT_MATTERS_V6)}
+# Product-1.1 (live audit of the Product-1 smoke): v4 turned a headline-only report
+# ("A股利好！又一批增持回购来了") into "…增持回购计划，被视为利好消息" (a plan and a perception the
+# title does not state), and v6 completed a publisher-cut excerpt ("…via App Store and …") as
+# "among other platforms". v5/v7 are v4/v6 plus the evidence limits below; the request carries
+# ``evidence_quality`` and each report's ``excerpt_cut`` (``ai_enrichment.insight_payload``), and
+# ``ai_evidence.grounding_errors`` rejects the same expansions deterministically.
+EVIDENCE_LIMITS = """\
+Evidence limits (they override any wish to be informative):
+- Never complete a truncated clause, list, quote, sentence, or source excerpt. A report marked \
+excerpt_cut (its excerpt ends with … or stops mid-clause) was cut off: use only its visible \
+words, never guess how it continues, and never add "and others", "among other platforms", \
+等平台, or anything similar.
+- Words of plan, intention, motive, expectation, implication, or interpretation (plans, aims to, \
+expects, likely, boosts, seen as, signals, means, 计划, 拟, 旨在, 为了, 预计, 有望, 将推动, \
+被视为, 意味着, 表明) may appear only when a report uses the same kind of word for the same claim.
+- A shorter point is better than a point with an added detail. If you are unsure whether a \
+report states something, leave it out."""
+
+EVENT_SUMMARY_V5 = replace(
+    EVENT_SUMMARY_V4,
+    version="event_summary_v5",
+    system=EVENT_SUMMARY_V4.system.replace(
+        GROUNDING_RULES,
+        f"""{EVIDENCE_LIMITS}
+- When a report has no excerpt (evidence_quality headline_only or multi_source_headlines), a \
+point may only restate what its title says, in plain words: no plan, motive, expectation, \
+interpretation, market implication, cause, subject, or context that the title does not state.
+
+{GROUNDING_RULES}""",
+    ),
+    grounding_guards=True,
+)
+EVENT_WHY_IT_MATTERS_V7 = replace(
+    EVENT_WHY_IT_MATTERS_V6,
+    version="event_why_it_matters_v7",
+    system=EVENT_WHY_IT_MATTERS_V6.system.replace(
+        GROUNDING_RULES,
+        f"""{EVIDENCE_LIMITS}
+- Each point must give context that a report states beyond the bare fact of the Event. Do not \
+restate the headline, the Event itself, or a description of the product as a point; if no \
+report gives such context, return no points and set insufficient_evidence to true.
+
+{GROUNDING_RULES}""",
+    ),
+    grounding_guards=True,
+)
+assert EVENT_SUMMARY_V5.system != EVENT_SUMMARY_V4.system
+assert EVENT_WHY_IT_MATTERS_V7.system != EVENT_WHY_IT_MATTERS_V6.system
+
+# The current primary prompts; v4/v6 stay byte-identical for their stored artifacts.
+INSIGHT_PROMPTS = {spec.artifact_type: spec for spec in (EVENT_SUMMARY_V5, EVENT_WHY_IT_MATTERS_V7)}
 
 
 # --- Cross-language lineage (Phase 7.1 Checkpoint E) — LEGACY, generation disabled -------------

@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { ExternalLink, InfoNote, PageState } from "../../../components/shared";
-import { ApiError, fetchEvent, fetchEventAi, fetchEventContent, type AIInsightArtifact, type AIInsightType, type EventAI, type EventContentItem, type EventDetail } from "../../../lib/api";
+import { ApiError, fetchEvent, fetchEventAi, fetchEventContent, type AIInsight, type AIInsightArtifact, type AIInsightType, type EventAI, type EventContentItem, type EventDetail } from "../../../lib/api";
 import { common, formatDateTime, useLocale, type Locale } from "../../../lib/i18n";
 
 const TIMELINE_PAGE = 10;
@@ -24,6 +24,7 @@ const aiCopy = {
     states: {not_generated: "Not generated for this event.", failed: "Not available: the last attempt did not pass checks.", rejected: "Withdrawn after review and not shown.", stale: "Not shown: it was generated from earlier reports or earlier AI instructions."} as Record<string, string>,
     insufficientWhy: "The reports do not give enough context to explain why this matters.",
     insufficientSummary: "The reports are brief; this summary only restates what they report.",
+    tooBrief: "The report is too brief to summarize.",
     aiDetails: "AI insights",
     generated: (date: string, model: string, version: string) => `generated ${date} · ${model} · ${version}`,
     contexts: {business: "Business", technology: "Technology", industry: "Industry", product: "Product", regulatory: "Regulatory"} as Record<string, string>,
@@ -37,6 +38,7 @@ const aiCopy = {
     states: {not_generated: "该事件尚未生成。", failed: "暂不可用：最近一次生成未通过校验。", rejected: "经人工审核后已撤下，不予显示。", stale: "不予显示：基于较早的报道或较早的 AI 指令生成。"} as Record<string, string>,
     insufficientWhy: "现有报道不足以说明该事件为何值得关注。",
     insufficientSummary: "报道内容较少，此摘要仅复述报道所述内容。",
+    tooBrief: "报道过于简短，无法生成摘要。",
     aiDetails: "AI 解读",
     generated: (date: string, model: string, version: string) => `生成于 ${date} · ${model} · ${version}`,
     contexts: {business: "商业", technology: "技术", industry: "行业", product: "产品", regulatory: "监管"} as Record<string, string>,
@@ -78,10 +80,18 @@ function AIInsights({ data, failed, locale }: { data?: EventAI; failed: boolean;
       const insight = data.insights[kind];
       if (insight.state === "available" && insight.artifact) return <AIInsightCard key={kind} kind={kind} artifact={insight.artifact} locale={locale}/>;
       return <section key={kind} className="ai-unavailable" aria-labelledby={`ai-${kind}`}>
-        <h2 id={`ai-${kind}`}>{kind === "event_summary" ? t.summary : t.why}</h2><p>{t.states[insight.state] ?? t.states.not_generated}</p>
+        <h2 id={`ai-${kind}`}>{kind === "event_summary" ? t.summary : t.why}</h2><p>{unavailableText(insight, locale)}</p>
       </section>;
     })}
   </div>;
+}
+
+/** Why an insight is not shown; Product-1.1 names evidence the insight cannot be grounded on. */
+function unavailableText(insight: AIInsight, locale: Locale) {
+  const t = aiCopy[locale];
+  if (insight.state === "not_generated" && insight.reason === "insufficient_evidence") return t.insufficientWhy;
+  if (insight.state === "not_generated" && insight.reason === "headline_too_short") return t.tooBrief;
+  return t.states[insight.state] ?? t.states.not_generated;
 }
 
 /** Generation details for the About note: provenance of each AI insight, or why it is not shown. */
@@ -94,7 +104,7 @@ function AIDetails({ data, locale }: { data?: EventAI; locale: Locale }) {
     const title = kind === "event_summary" ? t.summary : t.why;
     const text = insight.state === "available" && insight.artifact
       ? t.generated(formatDateTime(insight.artifact.generated_at, locale), insight.artifact.model, insight.artifact.prompt_version)
-      : (t.states[insight.state] ?? t.states.not_generated).replace(/[.。]$/, "");
+      : unavailableText(insight, locale).replace(/[.。]$/, "");
     return <span key={kind}>{index > 0 && (locale === "zh-CN" ? "；" : "; ")}{locale === "zh-CN" ? `「${title}」${text}` : `${title} — ${text}`}</span>;
   })}{locale === "zh-CN" ? "。" : "."}</p>;
 }

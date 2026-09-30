@@ -109,7 +109,16 @@ def no_trending(monkeypatch):
     )
 
 
+# Product-1.1: synthetic reports carry a complete excerpt by default (both AI tasks eligible);
+# ``description=""`` gives a bare headline.
+DEFAULT_EXCERPT = "The report gives further details of this announcement for readers."
+
+
 def make_event(db, sources, domain, title, minutes=0, language="en", description=None):
+    if description is None:
+        description = (
+            DEFAULT_EXCERPT if language == "en" else "报道介绍了此事的更多细节，供读者参考。"
+        )
     source = sources[(str(domain), language)]
     at = T0 + timedelta(minutes=minutes)
     item = ContentItem(
@@ -122,7 +131,7 @@ def make_event(db, sources, domain, title, minutes=0, language="en", description
         published_at=at,
         observed_at=at,
         language=language,
-        description=description,
+        description=description or None,
         item_metadata={},
         content_hash=str(uuid4()),
     )
@@ -318,7 +327,14 @@ def test_card_summary_priority_and_states(db, factory, settings, sources):
         80,
         description="The studio revealed its next game at a showcase on Tuesday. Read more",
     )
-    bare = make_event(db, sources, Domain.GAMING, f"Bare {uuid4().hex[:6]} headline", 81)
+    bare = make_event(
+        db,
+        sources,
+        Domain.GAMING,
+        f"Studio {uuid4().hex[:6]} confirms its next game",
+        81,
+        description="",
+    )
     excerpt = card_summaries(db, [described.id, bare.id])
     assert excerpt[described.id] == {
         "kind": "excerpt",
@@ -423,3 +439,137 @@ def test_get_requests_never_call_a_provider_crawler_or_update(
         for method in getattr(route, "methods", set())
     }
     assert methods <= {"GET", "HEAD"}
+
+
+# --- Product-1.1: evidence quality gates tasks, planning, and version invalidation -----------
+
+
+def legacy_artifact(db, event, spec, output, status="valid"):
+    """A stored artifact of an older prompt version, as the Product-1 run wrote them."""
+
+    from industry_intelligence.services.ai_evidence import input_hash, load_event_evidence
+
+    evidence = load_event_evidence(db, event.id)
+    row = AIArtifact(
+        entity_type="event",
+        entity_key=str(event.id),
+        artifact_type=spec.artifact_type,
+        locale="en",
+        provider="fixture",
+        model="fixture-model",
+        prompt_version=spec.version,
+        input_hash=input_hash(spec.version, "en", evidence),
+        source_content_ids=evidence.content_ids,
+        output_json=output,
+        status=status,
+        artifact_metadata={},
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_headline_only_event_gets_a_summary_task_only(db, factory, settings, sources, no_trending):
+    event = make_event(
+        db,
+        sources,
+        Domain.COMPUTER,
+        f"Chipmaker {uuid4().hex[:6]} opens a new plant",
+        95,
+        description="",
+    )
+    provider = Provider()
+    result = stage(settings, factory, 1, provider)
+    assert result.counts["selected_events"] == 1
+    assert result.counts["summary_tasks_eligible"] == 1 and result.counts["why_tasks_eligible"] == 0
+    assert result.counts["skipped_insufficient_evidence"] == 1
+    assert result.counts["tasks"] == 1 and result.counts["requests"] == 1
+    assert result.counts["failed"] == 0 and len(provider.calls) == 1
+    [row] = result.details
+    assert row["evidence_quality"] == "headline_only"
+    assert row["eligible"] == {"event_summary": True, "event_why_it_matters": False}
+    assert row["tasks"] == {"would_generate": 1, "skipped_insufficient_evidence": 1}
+    # The skipped task is not a failure, not cached, and no artifact row exists for it.
+    assert {a.artifact_type for a in artifacts(db, event.id)} == {"event_summary"}
+    read = event_ai(db, event.id)
+    assert read["insights"]["event_why_it_matters"] == {
+        "state": "not_generated",
+        "artifact": None,
+        "reason": "insufficient_evidence",
+    }
+    assert read["coverage"] == {"required": 1, "available": 1, "complete": True}
+    # The request tells the model the evidence quality.
+    assert '"evidence_quality": "headline_only"' in provider.calls[0]["user"]
+
+
+def test_events_without_an_eligible_task_are_never_selected(db, sources, no_trending):
+    bare = make_event(db, sources, Domain.GAMING, f"Dots{uuid4().hex[:4]}.gov", 99, description="")
+    listed = make_event(db, sources, Domain.GAMING, f"Studio {uuid4().hex[:6]} ships a sequel", 1)
+    selected = select_bounded_events(db, 15)
+    assert bare.id not in selected and listed.id in selected
+    # "Up to" the cap: the gate never pads the selection with ineligible Events.
+    assert len(selected) <= 15
+
+
+def test_old_prompt_version_is_stale_and_home_falls_back(
+    db, factory, settings, sources, no_trending
+):
+    from industry_intelligence.ai.prompts.event_insights import EVENT_SUMMARY_V4
+
+    event = make_event(
+        db,
+        sources,
+        Domain.GAMING,
+        f"Studio {uuid4().hex[:6]} dates its sequel",
+        97,
+        description="The studio confirmed the sequel will release next spring on consoles.",
+    )
+    old = legacy_artifact(
+        db,
+        event,
+        EVENT_SUMMARY_V4,
+        {"points": [{"text": "Old v4 text.", "evidence": []}], "insufficient_evidence": False},
+    )
+    # The v4 artifact is kept (history) but no longer current: stale, never displayed.
+    assert event_ai(db, event.id)["insights"]["event_summary"]["state"] == "stale"
+    assert available_summaries(db, [event.id]) == {}
+    assert card_summaries(db, [event.id])[event.id]["kind"] == "excerpt"
+    # The plan regenerates it under v5 instead of treating it as cached.
+    result = asyncio.run(
+        ai_enrichment.enrich_events(
+            settings, factory, event_ids=[event.id], dry_run=True, provider=Provider()
+        )
+    )
+    assert result["cached"] == 0 and result["would_generate"] == 2 and result["stale"] == 1
+    db.refresh(old)
+    assert old.status == "valid" and old.prompt_version == "event_summary_v4"
+
+
+def test_ineligible_task_hides_an_older_artifact(db, sources):
+    from industry_intelligence.ai.prompts.event_insights import EVENT_WHY_IT_MATTERS_V6
+
+    event = make_event(
+        db,
+        sources,
+        Domain.GAMING,
+        f"Studio {uuid4().hex[:6]} launches October 29",
+        96,
+        description="The free-to-play survival game will launch for iOS via App Store and …",
+    )
+    legacy_artifact(
+        db,
+        event,
+        EVENT_WHY_IT_MATTERS_V6,
+        {
+            "points": [
+                {
+                    "text": "It launches on iOS, among other platforms.",
+                    "context": "product",
+                    "evidence": [],
+                }
+            ],
+            "insufficient_evidence": False,
+        },
+    )
+    why = event_ai(db, event.id)["insights"]["event_why_it_matters"]
+    assert why == {"state": "not_generated", "artifact": None, "reason": "insufficient_evidence"}

@@ -518,6 +518,9 @@ async def ai_stage(settings, session_factory, limit, provider=None, dry_run=Fals
         "skipped_rejected",
         "skipped_failed",
         "skipped_no_primary_locale",
+        "summary_tasks_eligible",
+        "why_tasks_eligible",
+        "skipped_insufficient_evidence",
     )
     domains = Counter(row["domain"] for row in planned["events"])
     stage.counts.update(
@@ -871,7 +874,8 @@ def render_text(result):
         for row in stage.details:
             lines.append(
                 f"  event {row['event_id']} {row['domain']} sources {row['source_count']} "
-                f"locale {row['primary_locale']}: {_counts(row['tasks']) or 'no tasks'}"
+                f"locale {row['primary_locale']} evidence {row.get('evidence_quality')}: "
+                f"{_counts(row['tasks']) or 'no tasks'}"
             )
         for row in stage.sources:
             if "error" in row:

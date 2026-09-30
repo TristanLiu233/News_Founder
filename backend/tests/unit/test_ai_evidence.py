@@ -94,9 +94,9 @@ def test_prompt_versions_are_unique_and_explicit():
             "event_why_it_matters",
         }
     )
-    # Primary-locale prompts stay the Checkpoint D audited versions.
-    assert INSIGHT_PROMPTS["event_summary"].version == "event_summary_v4"
-    assert INSIGHT_PROMPTS["event_why_it_matters"].version == "event_why_it_matters_v6"
+    # Product-1.1: the primary prompts are the Checkpoint D audited v4/v6 plus evidence limits.
+    assert INSIGHT_PROMPTS["event_summary"].version == "event_summary_v5"
+    assert INSIGHT_PROMPTS["event_why_it_matters"].version == "event_why_it_matters_v7"
     # AI-X1: the cross-language Summary moved to v2; Why It Matters stays xlang v1.
     assert CROSS_LANGUAGE_PROMPTS["event_summary"].version == "event_summary_xlang_v2"
     assert CROSS_LANGUAGE_PROMPTS["event_why_it_matters"].version == (
@@ -157,8 +157,10 @@ def test_cross_language_prompts_are_the_primary_text_plus_language_rules():
         "event_summary": (OUTPUT_LANGUAGE_RULES_SUMMARY_V2, FINAL_LANGUAGE_CHECK_SUMMARY_V2),
         "event_why_it_matters": (OUTPUT_LANGUAGE_RULES, FINAL_LANGUAGE_CHECK),
     }
+    # The legacy lineage was built from the Checkpoint D primary prompts (v4/v6), not v5/v7.
+    base = {"event_summary": EVENT_SUMMARY_V4, "event_why_it_matters": EVENT_WHY_IT_MATTERS_V6}
     for artifact_type, spec in CROSS_LANGUAGE_PROMPTS.items():
-        primary = INSIGHT_PROMPTS[artifact_type]
+        primary = base[artifact_type]
         language, final = rules[artifact_type]
         assert spec.schema == primary.schema and spec.output_model is primary.output_model
         assert spec.system == primary.system.replace(
@@ -229,18 +231,27 @@ def test_primary_locale_is_the_one_locale_of_every_report(languages, expected):
 
 def test_only_cross_language_requests_carry_the_output_language():
     ev = evidence(item("广西追加4.2亿元购车补贴", language="zh-CN"))
-    for artifact_type, spec in CROSS_LANGUAGE_PROMPTS.items():
+    for spec in CROSS_LANGUAGE_PROMPTS.values():
         assert insight_payload(spec, ev, "en")["output_language"] == "English"
         assert insight_payload(spec, ev, "zh-CN")["output_language"] == "Simplified Chinese"
         assert insight_payload(spec, ev, "en")["reports"] == render_event(ev)["reports"]
-        # Primary-locale requests stay exactly as audited in Checkpoint D.
-        assert insight_payload(INSIGHT_PROMPTS[artifact_type], ev, "zh-CN") == render_event(ev)
+    # The Checkpoint D primary prompts' requests are unchanged; Product-1.1 (v5/v7) requests add
+    # only the deterministic evidence quality and each report's excerpt_cut flag.
+    for spec in (EVENT_SUMMARY_V4, EVENT_WHY_IT_MATTERS_V6):
+        assert insight_payload(spec, ev, "zh-CN") == render_event(ev)
+    for spec in INSIGHT_PROMPTS.values():
+        payload = insight_payload(spec, ev, "zh-CN")
+        assert payload["evidence_quality"] == "headline_only"
+        assert [report.pop("excerpt_cut") for report in payload["reports"]] == [False]
+        assert {k: v for k, v in payload.items() if k != "evidence_quality"} == render_event(ev)
 
 
 def test_lineages_hash_separately():
     ev = evidence(item("广西追加4.2亿元购车补贴", language="zh-CN"))
+    # The legacy lineage was built from the Checkpoint D primary prompts (v4/v6), not v5/v7.
+    base = {"event_summary": EVENT_SUMMARY_V4, "event_why_it_matters": EVENT_WHY_IT_MATTERS_V6}
     for artifact_type, spec in CROSS_LANGUAGE_PROMPTS.items():
-        primary = INSIGHT_PROMPTS[artifact_type]
+        primary = base[artifact_type]
         assert input_hash(spec.version, "en", ev) != input_hash(primary.version, "en", ev)
         assert input_hash(f"{spec.version}9", "en", ev) != input_hash(spec.version, "en", ev)
 

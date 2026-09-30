@@ -27,9 +27,11 @@ from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS
 from industry_intelligence.db.models import AIArtifact
 from industry_intelligence.services.ai_enrichment import ENTITY_EVENT
 from industry_intelligence.services.ai_evidence import (
+    evidence_quality,
     input_hash,
     load_event_evidence,
     primary_locale,
+    task_eligibility,
 )
 from industry_intelligence.services.events import resolve_event_redirect
 
@@ -120,16 +122,22 @@ def event_ai(session, event_id, locale=None):
     by_type = {}
     for artifact in artifacts:
         by_type.setdefault(artifact.artifact_type, []).append(artifact)
-    insights = {
-        artifact_type: (
-            _insight(spec, evidence, by_type.get(artifact_type, []), primary)
-            if primary is not None
-            else {"state": "not_generated", "artifact": None}
-        )
-        for artifact_type, spec in INSIGHT_PROMPTS.items()
-    }
+    eligibility = task_eligibility(evidence_quality(evidence))
+    insights = {}
+    for artifact_type, spec in INSIGHT_PROMPTS.items():
+        eligible, reason = eligibility[artifact_type]
+        if primary is None:
+            insights[artifact_type] = {"state": "not_generated", "artifact": None}
+        elif not eligible:
+            # Product-1.1: the evidence cannot ground this insight, so none is generated; older
+            # artifacts (e.g. a previous prompt version) are not shown either.
+            insights[artifact_type] = {"state": "not_generated", "artifact": None, "reason": reason}
+        else:
+            insights[artifact_type] = _insight(
+                spec, evidence, by_type.get(artifact_type, []), primary
+            )
     available = sum(insight["state"] == "available" for insight in insights.values())
-    required = len(INSIGHT_PROMPTS) if primary is not None else 0
+    required = sum(eligible for eligible, _ in eligibility.values()) if primary is not None else 0
     return {
         "event_id": str(canonical_id),
         "requested_id": str(event_id),
@@ -181,7 +189,7 @@ def available_summaries(session, event_ids):
             continue
         evidence = load_event_evidence(session, event_id)
         primary = primary_locale(evidence) if evidence is not None else None
-        if primary is None:
+        if primary is None or not task_eligibility(evidence_quality(evidence))[SUMMARY_TYPE][0]:
             continue
         insight = _insight(spec, evidence, [a for a in artifacts if a.locale == primary], primary)
         artifact = insight["artifact"]

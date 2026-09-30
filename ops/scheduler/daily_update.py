@@ -1,9 +1,10 @@
 """Scheduler-1 entry point for the macOS launchd agent.
 
-Runs exactly one ``intelligence-update --ai-limit 12`` from the repository's virtualenv
-(Product-1: bounded AI, at most 12 Events and so at most 24 primary-locale provider requests,
-cached artifacts reused, provider preflighted, enabled after a verified 10-Event live smoke;
-before Product-1 it ran ``--skip-ai``, which stays the rollback: set ``AI_ARGS`` back). The
+Runs exactly one ``intelligence-update --skip-ai`` from the repository's virtualenv. Product-1
+enabled bounded AI here (``--ai-limit 12``); Product-1.1 rolled it back because its fresh live
+quality smoke still produced one unsupported detail (blocked by the validator, but the gate
+requires zero). Re-enabling is one setting (``AI_ARGS = ["--ai-limit", "12"]``) and only after a
+fresh live smoke with zero unsupported-detail findings; manual bounded runs stay available. The
 launchd job starts this file with ``.venv/bin/python`` directly (not a shell: macOS privacy
 protection denies a launchd-started ``/bin/sh`` access to ``~/Documents``). Configuration comes
 only from the root ``.env`` through ``Settings``; the Operations-2 advisory lock, precheck,
@@ -21,8 +22,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_ZONE = "Australia/Sydney"
 EX_CONFIG = 78
-# Bounded scheduled AI (never unbounded; the CLI refuses a cap above 15).
-AI_ARGS = ["--ai-limit", "12"]
+# Scheduled AI is off (Product-1.1 quality gate). When re-enabled it is bounded: the CLI refuses a
+# cap above 15.
+AI_ARGS = ["--skip-ai"]
 
 
 def log(event, **fields):

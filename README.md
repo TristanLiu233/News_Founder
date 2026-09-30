@@ -820,15 +820,17 @@ python -m industry_intelligence.cli source-health --json
 
 Status (2026-09-30): **enabled and verified** on the development Mac. A macOS launchd agent runs
 the one scheduler command daily at 10:00 Australia/Sydney (moved from the initial 08:00 on
-2026-09-30). Since Product-1 the run includes bounded AI (`--ai-limit 12`).
+2026-09-30). Scheduled AI is off: Product-1 enabled bounded AI (`--ai-limit 12`) and Product-1.1
+turned it off again after its live quality check.
 
 - **Mechanism:** a per-user launchd agent (`~/Library/LaunchAgents/local.industry-intelligence.daily-update.plist`,
   generated from `ops/scheduler/local.industry-intelligence.daily-update.plist.template`).
   launchd is the native scheduler on macOS; cron is legacy there, and Docker, GitHub Actions, and
   systemd are not part of this host.
 - **Command:** launchd starts `.venv/bin/python ops/scheduler/daily_update.py`, which runs exactly
-  `python -m industry_intelligence.cli intelligence-update --ai-limit 12` (Product-1; it ran
-  `--skip-ai` before, which stays the rollback) from `backend/` with a
+  `python -m industry_intelligence.cli intelligence-update --skip-ai` (bounded AI with
+  `--ai-limit 12` is one setting away, re-enabled only after a clean live quality check) from
+  `backend/` with a
   minimal environment (`PATH`, `HOME`, `LANG`, `PYTHONUNBUFFERED`). Configuration comes only from
   the root `.env` through `Settings`; no secret is copied into the plist or the wrapper. The
   Operations-2 lock, precheck, postcheck, `update_runs`, and `source_attempts` stay
@@ -879,7 +881,7 @@ Running the wrapper by hand (without `--plan`) performs a real update.
 ## Local-1 — Local runtime (native PostgreSQL 16)
 
 Status (2026-09-30): the local database runs natively; **daily local operation does not require
-Docker Desktop**. The launchd update (10:00 Australia/Sydney, `--skip-ai` at the time; bounded AI `--ai-limit 12` since Product-1) reads `DATABASE_URL`
+Docker Desktop**. The launchd update (10:00 Australia/Sydney, `--skip-ai`) reads `DATABASE_URL`
 from the root `.env` and was verified with Docker fully quit. Production packaging is unchanged:
 Docker Compose stays the planned production mechanism (Deployment-2A), so local and production
 database runtimes are intentionally different.
@@ -1096,8 +1098,8 @@ The implementation record, decisions, and live verification are in `DEVELOPMENT.
   anything else is refused. The Events are chosen deterministically (each domain's current
   Trending Events, then its most recent ones, domains in turn), cached artifacts are reused
   without a request, the provider credential is checked without generating before the first
-  request, and a refused credential stops the batch. The local launchd job runs
-  `intelligence-update --ai-limit 12` (at most 24 requests); `--skip-ai` turns AI off.
+  request, and a refused credential stops the batch. Scheduled AI is currently off (see
+  Product-1.1); `intelligence-update --ai-limit N` runs it by hand.
 
 ```bash
 cd backend
@@ -1107,3 +1109,16 @@ python -m industry_intelligence.cli ingest-content eastmoney_click_rank
 
 The implementation record, source audit, 10-Event live AI audit, and verification are in
 `DEVELOPMENT.md`.
+
+## Product-1.1 — AI only where the evidence supports it
+
+- AI summaries are generated only for a bounded set of Events whose reports give enough to
+  summarize; a headline too short to state a fact gets none.
+- Why It Matters is omitted when the reports give no context beyond the bare fact (for example
+  headline-only reports or a short excerpt the publisher cut off). The Event page then says the
+  reports do not give enough context; no provider request is spent on it.
+- AI text never completes a cut-off excerpt and never adds plans, motives, expectations, or
+  interpretations the reports do not state; output that does is rejected and not shown, and Home
+  falls back to the publisher excerpt or no summary.
+- The daily scheduled run is `--skip-ai` for now: a live check still found one blocked
+  unsupported detail, and scheduled AI returns only after a clean check.

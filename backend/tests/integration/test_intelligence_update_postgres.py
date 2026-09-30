@@ -126,6 +126,8 @@ def registry(monkeypatch, tag):
                     T0,
                     T0 + timedelta(minutes=5),
                     "en",
+                    # Product-1.1: a complete excerpt, so the Event supports both AI tasks.
+                    "The studio said the expansion adds a new region and two story chapters.",
                 )
             ]
 

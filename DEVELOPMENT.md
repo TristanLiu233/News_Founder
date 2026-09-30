@@ -23,21 +23,23 @@ planned or speculative results in a finished entry.
 - A chronological feed position is recency, never a rank.
 - Source access honours robots.txt and publisher policy with the application's honest
   `HTTPClient`; blocked sources are recorded, never worked around.
-- Scheduled AI is bounded (Product-1): the local scheduler runs `intelligence-update --ai-limit 12`
-  (hard cap 15 in code, deterministic selection, cache first, provider preflight); page and GET
-  requests never call AI, a crawler, or the update. AI never mutates canonical (Layer-2) data.
+- AI is bounded and evidence-gated: `intelligence-update --ai-limit N` (1–15, deterministic
+  selection, cache first, provider preflight) generates only the tasks the evidence quality
+  supports. Scheduled AI stays off (`--skip-ai`) until a fresh live smoke has zero
+  unsupported-detail findings (Product-1.1 rolled it back). Page and GET requests never call AI,
+  a crawler, or the update. AI never mutates canonical (Layer-2) data.
 - Read `AGENTS.md` and the current code, migrations, and tests before relying on any plan.
 
 ## Current Baseline
 
 - Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1 and Product-1).
-- Backend: pytest 822 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
-  `industry_intelligence_test`; unit 613; Ruff check and format check clean (after Product-1).
+- Backend: pytest 853 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
+  `industry_intelligence_test`; unit 640; Ruff check and format check clean (after Product-1.1).
 - Frontend: ESLint, TypeScript, and the Next.js production build (11 routes) pass.
 - Live dev database: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health`
   30/30 healthy (25 earlier sources + 5 publisher ranked lists).
-- Local runtime: native PostgreSQL 16 (Local-1); daily launchd `intelligence-update --ai-limit 12`
-  at 10:00 Australia/Sydney (bounded AI since Product-1; `--skip-ai` before).
+- Local runtime: native PostgreSQL 16 (Local-1); daily launchd `intelligence-update --skip-ai`
+  at 10:00 Australia/Sydney (bounded AI was enabled by Product-1 and rolled back by Product-1.1).
 
 ## Development Entry Template
 
@@ -754,3 +756,202 @@ per-Event plan), not stored in `update_runs`.
 
 Owner review of the first scheduled bounded-AI run (2026-10-01 10:00 Australia/Sydney:
 `daily-update.log`, `update_runs` AI counts, `source-health`), and of the two noted artifacts.
+
+## 2026-09-30 — Product-1.1 — AI Grounding & Evidence-Quality Gate
+
+Status: complete (2026-09-30). Scheduled AI rolled back to `--skip-ai`.
+
+### Starting state
+
+- Branch `phase-7` at `8e6c5a1` ("feat: make Home event-first and enable bounded AI updates"),
+  clean working tree, no remote. Alembic head `20260930_12`.
+- Baseline (actual, rerun first): pytest **822 passed, 1 skipped** (isolated test DB; unit 613);
+  Ruff check and format check clean (180 files); `data-quality-audit` 0 errors / 0 warnings /
+  6 info; frontend ESLint, TypeScript, and Next.js build (11 routes) pass. No scheduled run had
+  happened since Product-1.
+
+### Known Product-1 AI findings
+
+The Product-1 10-Event smoke (20 tasks, 20 validator-valid) had two human-audit notes the
+validators accepted: `d4863980` (headline-only 新浪财经 Event) Summary added 计划 / 被视为利好消息;
+`04197252` (Gematsu excerpt ending "and …") Why It Matters wrote "among other platforms".
+
+### Scope / exclusions
+
+In scope: deterministic evidence quality, task-level eligibility, grounding hardening with new
+prompt versions, planning/cost accounting, a fresh live smoke, and a scheduler decision.
+Excluded: new or changed sources, canonical data repair (Gematsu duplicate, catalog,
+clustering, Company links), thresholds, bilingual AI, Home redesign, production systemd (stays
+`--skip-ai`), push.
+
+### Root-cause audit (pipeline traced end to end)
+
+Pipeline: `ai_evidence.load_event_evidence` (persisted ContentItems in publication order;
+`excerpt` = stored `description` cut at 280 characters) → `render_event` /
+`ai_enrichment.insight_payload` (JSON user message: ref, source, language, time, title,
+excerpt) → `system_prompt` (`event_summary_v4` / `event_why_it_matters_v6` + `GROUNDING_RULES`)
+→ `generate_with_retry` → `ai_evidence.validate_output` → one `ai_artifacts` row.
+
+- `d4863980` (artifact `e52ddc83`, `event_summary_v4`): evidence supplied = one 新浪财经 report,
+  title "A股利好！又一批增持回购来了", `excerpt: null` (headline-only). Output "据新浪财经报道，A股
+  市场再迎一批公司增持回购计划，被视为利好消息。" adds a plan (计划), a perception (被视为), and a
+  subject (公司). It passed because `validate_output` for primary prompts checks only schema,
+  own-Event refs, advice/prediction regexes, single-source consensus, figures, and locale; the
+  connector/gloss guards ran only for the legacy cross-language lineage, and no check compared
+  framing words with the evidence. The v4 prompt forbade strengthening an existing plan but did
+  not forbid adding one to a bare title.
+- `04197252` (artifact `a693c58a`, `event_why_it_matters_v6`): evidence supplied = one Gematsu
+  report, title "Monster Hunter Outlanders launches October 29", excerpt "Free-to-play
+  open-world survival game Monster Hunter Outlanders will launch for iOS via App Store and …"
+  (the publisher's own RSS truncation; the marker reached the model unchanged). Output "… will
+  launch for iOS via App Store, among other platforms." completes the cut list. Same validator
+  gap; no prompt rule about truncated excerpts.
+- Additional finding: `load_event_evidence` cut descriptions longer than 280 characters without
+  a marker (live Nasdaq excerpts ended "…it's expecte"), so a silent cut looked complete.
+- Survey of stored excerpt endings (live): explicit "…" in IT之家 111, GameLook 45, Gematsu 42,
+  GamesIndustry.biz 7, TechCrunch 1; GamesIndustry.biz "Read more" 31 (complete); CNBC,
+  TechCrunch, Ars Technica, Nasdaq mostly end with punctuation; Nasdaq 11 cut mid-word by the
+  loader; HN, 新浪财经, 东方财富, 3DM rows have no excerpt.
+
+### Evidence-quality model (deterministic, `ai_evidence`)
+
+- `clip_excerpt`: a cut made by the loader now ends with "…".
+- `excerpt_state(excerpt, title)` → `none` (absent, under 20 units, or only the headline again),
+  `complete`, or `truncated` (trailing "…", "...", "[…]", or a tail ending on a comma or a
+  joining word such as and/or/of/via/和/及; a trailing "Read more" is removed and is not a cut).
+  Units count a CJK character twice.
+- An excerpt is *substantive* when complete, or cut with at least 160 visible units.
+- `evidence_quality(evidence)` classes: `headline_only`, `headline_plus_truncated_excerpt`,
+  `headline_plus_excerpt`, `multi_source_headlines`, `multi_source_with_excerpt`,
+  `rich_evidence` (two or more substantive excerpts), plus counts and `informative_headline`
+  (at least 4 whitespace words containing a letter, or 8 CJK characters).
+- Nothing uses source reputation, ranking, or AI.
+
+### Task-level eligibility policy
+
+`task_eligibility(quality)`: Summary is eligible when a headline is informative or a substantive
+excerpt exists (for bare titles the prompt allows only a conservative restatement; else
+`headline_too_short`); Why It Matters is eligible only with a substantive excerpt (else
+`insufficient_evidence`). An ineligible task makes no request, writes no row, and is counted
+`skipped_insufficient_evidence` (never cached or failed). The bounded selector admits only
+Events with at least one eligible task, so the cap means "up to 12". The read model returns an
+ineligible insight as `not_generated` with `reason`, hides any older artifact for it, and counts
+only eligible insights in `coverage.required`; the Event page shows "The reports do not give
+enough context to explain why this matters." / "The report is too brief to summarize." for these
+reasons (no Home change).
+
+### Prompt versions
+
+`event_summary_v4` → `event_summary_v5`, `event_why_it_matters_v6` → `event_why_it_matters_v7`
+(v4/v6 byte-identical and kept for their artifacts; the legacy cross-language lineage is still
+built from v4/v6). Both add `EVIDENCE_LIMITS`: never complete a truncated clause, list, quote,
+sentence, or excerpt (`excerpt_cut` reports: visible words only); plan/intention/motive/
+expectation/implication/interpretation words only when a report uses the same kind of word; a
+shorter point is better than an added detail. v5 adds: with no excerpt, restate only the title
+(no plan, motive, expectation, interpretation, market implication, cause, subject, or context).
+v7 adds: every point must give context beyond the bare fact; no restatement. v5/v7 requests also
+carry `evidence_quality` and per-report `excerpt_cut` (v4/v6 requests unchanged).
+
+### Validator changes (same `validate_output`, `PromptSpec.grounding_guards`)
+
+`grounding_errors` for v5/v7 output: (1) framing families — plan or intention, expectation,
+implication, interpretation, motive, open-ended extension ("among other(s)", "and other",
+"etc", 等平台, 其他平台 …) — each allowed only when the evidence contains a signal of the same
+family (so "计划" passes when a report says 计划); (2) the existing sequence/causal connector
+guard, now also for primary output; (3) `truncation_errors`: for a truncated excerpt, the last
+visible words before the cut (joining words removed) followed in the output by and/or/plus/as
+well as/以及/和/及/与/、 (a completed list or clause). No source- or Event-specific rule.
+
+### Artifact lifecycle
+
+The two flagged artifacts were confirmed against the stored evidence and marked `rejected` with
+the existing reviewer command (`ai-artifact-reject`, reasons recorded, rows kept). The v5/v7
+version bump makes every v4/v6 artifact non-current (the read model reports `stale` and serves
+nothing; the next generation of the same task marks the old row `stale`, as designed; 8 rows were
+marked in the smoke). An ineligible task's older artifact is simply not shown. No row was deleted
+or rewritten outside these established flows.
+
+### Planning / request accounting
+
+Plan and stage counts now include `summary_tasks_eligible`, `why_tasks_eligible`,
+`skipped_insufficient_evidence`, and per-Event `evidence_quality`, `eligible`, and `task_states`
+(cached / would_generate / skipped_* per task); `--plan` lists them. Live, the same kind of
+10-Event sample needed 10 provider requests instead of Product-1's 20 (every selected Trending
+Event is headline-only or has only a short cut excerpt, so all 10 Why It Matters tasks were
+skipped before any request).
+
+### Tests
+
+- New `tests/unit/test_ai_grounding.py` (26): excerpt states and markers, loader clip marker,
+  eight evidence-quality classifications, task eligibility (headline-only, cut excerpt, rich,
+  too-short headline), prompt versions (v5/v7 current, v4/v6 unchanged), Fixture A (4 rejected
+  expansions; v4 validator accepted it — the root cause; 2 conservative paraphrases pass;
+  supported 计划/预计/旨在 and "plans/expects" pass), English interpretation/causal/motive
+  framing, Fixture B (3 completions rejected for both prompts; visible-text-only output passes;
+  a list extension passes when the evidence has it).
+- `tests/integration/test_product1_postgres.py` 9 → 13: headline-only Event plans one task (1
+  request, Why skipped, read model reason and coverage 1/1, request carries `evidence_quality`);
+  Events without an eligible task are never selected; an older-version artifact reads `stale`,
+  Home falls back to the excerpt, and the plan regenerates it; an ineligible task hides an older
+  artifact. Synthetic reports in the AI, update, and Product-1 tests now carry a complete excerpt
+  by default so they keep testing two-task behaviour (bare titles are explicit).
+- `tests/unit/test_scheduler_wrapper.py` 3 → 4 (wrapper runs `--skip-ai`; re-enabling bounded AI
+  is one setting and stays capped). `tests/unit/test_ai_evidence.py`: current prompts v5/v7,
+  legacy lineage built from v4/v6, v5/v7 payload fields.
+- Results: pytest **853 passed, 1 skipped** (unit 640); Ruff check and format check clean (181
+  files); ESLint, TypeScript, Next.js build (11 routes) pass.
+
+### Fresh live smoke (2026-09-30)
+
+- Plan (`intelligence-update --plan --ai-limit 10 --source cmc_tech_market_cap`): 10 eligible
+  Events selected (computer 4, finance 3, gaming 3; 8 `headline_only`, 2
+  `headline_plus_truncated_excerpt`; `ff956e48` "Dots: Always-on agents" excluded as
+  `headline_too_short`), Summary tasks 10, Why tasks 0, skipped insufficient-evidence 10,
+  cached 0, provider tasks 10.
+- Run `20260930T104732Z-32e269ad` (`--ai-limit 10 --source cmc_tech_market_cap`; the
+  CompaniesMarketCap snapshot replayed): exit 3 (**degraded**: one generation failure); 1
+  Models-API preflight + 10 Messages requests, all HTTP 200; 16,772 input / 1,031 output tokens;
+  valid 9, failed 1 (`validation_failed`), rejected 0; stale marked 8; `ai_artifacts` +10; no
+  other table changed; postcheck audit 0/0.
+- Grounding audit (every task): 9 served Summaries PASS — Livenerf (restates the post title),
+  Gundam SteamDB, PSSA ("described as … according to a Hacker News post"), 美军/伊拉克 (juxtaposition
+  kept), Intergalactic (two points; the cut object "science-fiction adventure …" is not
+  completed), postal inspectors, 9月30日收盘, Monster Hunter Outlanders (October 29; "for iOS via
+  App Store" with nothing added), Atari parodies. **1 FLAG**: `d4863980` v5 Summary "A股市场又有一批
+  公司发布增持回购计划" — unsupported plan 计划 (and 发布, 公司) absent from the headline; the validator
+  rejected it (`unsupported plan or intention '计划'`), so it is stored `failed` and never served.
+  Wrong numbers 0, invented entities 0, truncated-evidence completions 0, wrong attributions 0.
+- Scheduler decision: **ROLL BACK** — the v5 prompt did not prevent the unsupported plan on the
+  same headline class (the validator did), and the gate requires zero unsupported-detail
+  findings in the generated output. `ops/scheduler/daily_update.py` `AI_ARGS = ["--skip-ai"]`;
+  `env -i` wrapper `--plan` exit 0 with `--skip-ai`; `launchctl print` unchanged (10:00, last
+  exit 0). Manual bounded AI (`intelligence-update --ai-limit N`) stays available. Production
+  systemd unchanged (`--skip-ai`).
+
+### Home / GET verification
+
+Isolated production build (3070) against the API (8070), live DB: Home order unchanged; 12 hero
+cards: 9 v5 AI summaries, 1 Gematsu excerpt, 2 without a summary line (`d4863980`: v5 failed and
+v4 rejected; `ff956e48`: now ineligible, its old v4 summary is hidden); no placeholder or state
+text; English and 简体中文 at desktop and 375 px, no overflow; Event `04197252` shows the v5
+Summary and "The reports do not give enough context…" / "现有报道不足以说明该事件为何值得关注。";
+Event `d4863980` shows the combined unavailable note. Console errors 0; API log GET only; no
+request to any Anthropic host; `ai_artifacts` unchanged by the browser run. After: audit 0/0/6
+info, `source-health` 30/30 healthy.
+
+### Known limitations
+
+- Headline-only Summaries mostly restate the headline; the Summary prompt still produced an
+  unsupported plan once on a headline-only Chinese finance title (caught by the validator, not by
+  the prompt), so scheduled AI stays off.
+- The framing families are word-level and evidence-aware; an unsupported claim with no family
+  word (e.g. the added subject 公司 or verb 发布) is not detected deterministically.
+- The live smoke exercised no Why It Matters task (no selected Trending Event had a substantive
+  excerpt); v7 is covered by tests only.
+- Thresholds (20/160 units, 4 words/8 CJK characters) are fixed rules calibrated on the live
+  corpus, not learned.
+
+### Next step
+
+Owner decision on re-enabling scheduled AI: a further Summary prompt version (or leaving
+headline-only Summaries ungenerated), then a fresh zero-finding live smoke.

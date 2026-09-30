@@ -111,7 +111,17 @@ def sources(db, tag):
     return rows
 
 
+# Product-1.1: synthetic reports carry a complete excerpt by default, so an Event supports both
+# AI tasks (the evidence-quality gate is tested separately); ``description=""`` gives a bare title.
+DEFAULT_EXCERPT = {
+    "en": "The report gives further details of this announcement for readers.",
+    "zh-CN": "报道介绍了此事的更多细节，供读者参考。",
+}
+
+
 def content(db, source, title, at=T0, language="en", description=None):
+    if description is None:
+        description = DEFAULT_EXCERPT.get(language)
     row = ContentItem(
         source_id=source.id,
         domain=Domain.GAMING,
@@ -122,7 +132,7 @@ def content(db, source, title, at=T0, language="en", description=None):
         published_at=at,
         observed_at=at + timedelta(minutes=5),
         language=language,
-        description=description,
+        description=description or None,
         item_metadata={},
         content_hash=str(uuid4()),
     )
@@ -202,7 +212,7 @@ def test_enrichment_generates_only_primary_locale_tasks(db, factory, settings, s
             ("event_summary", locale, "valid"),
             ("event_why_it_matters", locale, "valid"),
         }
-        assert {a.prompt_version for a in rows} == {"event_summary_v4", "event_why_it_matters_v6"}
+        assert {a.prompt_version for a in rows} == {"event_summary_v5", "event_why_it_matters_v7"}
         assert len({a.input_hash for a in rows}) == 2
     assert not db.scalars(
         select(AIArtifact).where(

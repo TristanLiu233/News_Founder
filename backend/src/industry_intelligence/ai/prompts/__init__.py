@@ -30,6 +30,9 @@ class PromptSpec:
     # names translated in attribution/speaker/institution positions, figure qualifiers the
     # reports do not use, and Chinese text that is not a copied name.
     english_output_guards: bool = False
+    # Product-1.1: evidence-aware grounding guards (``ai_evidence.grounding_errors``: framing,
+    # connectors, completion of cut excerpts) and the evidence-quality fields in the request.
+    grounding_guards: bool = False
 
 
 def object_schema(properties, required=None):

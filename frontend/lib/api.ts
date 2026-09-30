@@ -495,7 +495,15 @@ export interface AIInsightArtifact {
   id: string; artifact_type: AIInsightType; locale: string; provider: string; model: string;
   prompt_version: string; generated_at: string; insufficient_evidence: boolean; points: AIInsightPoint[];
 }
-export interface AIInsight { state: AIInsightState; artifact: AIInsightArtifact | null; error_code?: string | null; }
+/**
+ * `reason` (Product-1.1) is set when no artifact is generated because the Event's evidence cannot
+ * ground this insight: `insufficient_evidence` (Why It Matters without a substantive excerpt) or
+ * `headline_too_short`.
+ */
+export interface AIInsight {
+  state: AIInsightState; artifact: AIInsightArtifact | null; error_code?: string | null;
+  reason?: "insufficient_evidence" | "headline_too_short";
+}
 /**
  * AI-LP1: insights are always in the Event's `primary_locale` (null for a mixed-language Event,
  * which has no AI); the UI locale never selects the content language. `coverage` counts only

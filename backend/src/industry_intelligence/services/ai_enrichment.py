@@ -30,12 +30,15 @@ from industry_intelligence.ai.providers import build_provider
 from industry_intelligence.db.models import AIArtifact, Event, EventRedirect
 from industry_intelligence.domain.enums import Domain
 from industry_intelligence.services.ai_evidence import (
+    evidence_quality,
+    excerpt_state,
     input_hash,
     load_event_evidence,
     primary_locale,
     ref_map,
     render_event,
     render_user_message,
+    task_eligibility,
     validate_output,
 )
 from industry_intelligence.services.events import resolve_event_redirect
@@ -82,6 +85,11 @@ def insight_payload(spec, evidence, locale):
     """
 
     payload = render_event(evidence)
+    if spec.grounding_guards:
+        # Product-1.1: the deterministic evidence quality and which excerpts were cut.
+        payload["evidence_quality"] = evidence_quality(evidence)["class"]
+        for report, item in zip(payload["reports"], evidence.items, strict=True):
+            report["excerpt_cut"] = excerpt_state(item.excerpt, item.title)[0] == "truncated"
     if spec.cross_language:
         payload["output_language"] = LANGUAGE_NAMES.get(locale, "English")
     return payload
@@ -131,7 +139,10 @@ def _eligible(session, event_id):
     if event is None or event.content_count <= 0:
         return False
     evidence = load_event_evidence(session, event_id)
-    return bool(evidence and evidence.items) and primary_locale(evidence) is not None
+    if not (evidence and evidence.items) or primary_locale(evidence) is None:
+        return False
+    # Product-1.1 evidence-quality gate: at least one task the evidence can support.
+    return any(eligible for eligible, _ in task_eligibility(evidence_quality(evidence)).values())
 
 
 def select_bounded_events(session, max_events=DEFAULT_MAX_EVENTS):
@@ -140,7 +151,9 @@ def select_bounded_events(session, max_events=DEFAULT_MAX_EVENTS):
     Per domain (``Domain`` order: computer, finance, gaming), candidates are the Events currently
     on that domain's Trending (the Trending read model's own order: list catalog order, then each
     publisher's native rank), then the domain's most recently reported Events
-    (``last_published_at`` desc, ID). Only eligible Events count (``_eligible``). The domains are
+    (``last_published_at`` desc, ID). Only eligible Events count (``_eligible``: canonical,
+    primary locale, and — Product-1.1 — at least one task its evidence quality supports), so the
+    cap means "up to" that many Events. The domains are
     then taken round-robin, one Event each in turn, until ``max_events``; a domain that runs out
     is skipped. No score is computed and no AI is used to choose; an Event already enriched is
     still selected (its cached artifacts cost no request).
@@ -341,13 +354,29 @@ def _plan(session, events, artifact_types, locales, provider, skip_settled=False
             if primary_locale(evidence) is None:
                 counts["skipped_no_primary_locale"] += 1
             continue
-        planned.append((event, evidence, locale))
-        rows[str(event.id)] = {**_event_row(event, evidence), "tasks": Counter()}
+        quality = evidence_quality(evidence)
+        eligibility = task_eligibility(quality)
+        planned.append((event, evidence, locale, eligibility))
+        rows[str(event.id)] = {
+            **_event_row(event, evidence),
+            "evidence_quality": quality["class"],
+            "eligible": {kind: eligibility[kind][0] for kind in artifact_types},
+            "task_states": {},
+            "tasks": Counter(),
+        }
     if refused:
         raise CrossLanguageGenerationDisabled(refused)
-    for event, evidence, locale in planned:
+    for event, evidence, locale, eligibility in planned:
         for artifact_type in artifact_types:
             spec = INSIGHT_PROMPTS[artifact_type]
+            if not eligibility[artifact_type][0]:
+                # Product-1.1: the evidence cannot ground this task; no request is made (and it
+                # is neither cached nor failed).
+                counts["skipped_insufficient_evidence"] += 1
+                rows[str(event.id)]["tasks"]["skipped_insufficient_evidence"] += 1
+                rows[str(event.id)]["task_states"][artifact_type] = "skipped_insufficient_evidence"
+                continue
+            counts[f"eligible_{artifact_type}"] += 1
             digest = input_hash(spec.version, locale, evidence)
             cached = find_cached(
                 session,
@@ -376,11 +405,14 @@ def _plan(session, events, artifact_types, locales, provider, skip_settled=False
                 if settled:
                     counts[f"skipped_{settled}"] += 1
                     rows[str(event.id)]["tasks"][f"skipped_{settled}"] += 1
+                    rows[str(event.id)]["task_states"][artifact_type] = f"skipped_{settled}"
                     continue
             if stale:
                 counts["stale"] += 1
             counts["cached" if cached else "would_generate"] += 1
-            rows[str(event.id)]["tasks"]["cached" if cached else "would_generate"] += 1
+            state = "cached" if cached else "would_generate"
+            rows[str(event.id)]["tasks"][state] += 1
+            rows[str(event.id)]["task_states"][artifact_type] = state
             tasks.append(
                 {
                     "event": event,
@@ -454,6 +486,9 @@ async def enrich_events(
         "would_generate": counts["would_generate"],
         "estimated_requests": counts["would_generate"],
         "skipped_no_primary_locale": counts["skipped_no_primary_locale"],
+        "skipped_insufficient_evidence": counts["skipped_insufficient_evidence"],
+        "summary_tasks_eligible": counts["eligible_event_summary"],
+        "why_tasks_eligible": counts["eligible_event_why_it_matters"],
     }
     if skip_settled:
         result["skipped_rejected"] = counts["skipped_rejected"]
