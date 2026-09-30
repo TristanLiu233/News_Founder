@@ -235,6 +235,12 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .rank-evidence { display: flex; flex-wrap: wrap; gap: .35rem; margin: .45rem 0 0; padding: 0; list-style: none; }
 .rank-evidence li { padding: .12rem .5rem; border-radius: .3rem; background: #e6f2ec; color: #0b6e50; font-size: .78rem; overflow-wrap: anywhere; }
 .native-rank { font-weight: 800; }
+.rank-move { margin-left: .3rem; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.rank-move.up { color: #0b6e50; }
+.rank-move.down { color: #9a3b2e; }
+.rank-move.stable { color: #5c6660; }
+.rank-move.new { padding: 0 .25rem; border-radius: .2rem; background: #0b6e50; color: #fff; font-size: .66rem; letter-spacing: .02em; }
+.multi-list { margin: .3rem 0 0; color: #0b6e50; font-size: .78rem; font-weight: 600; }
 .trending-lists { margin: 0 0 .75rem; padding: 0; list-style: none; color: #626861; font-size: .8rem; }
 .trending-lists li { padding: .1rem 0; overflow-wrap: anywhere; }
 .event-timeline { margin: 0; padding: 0; list-style: none; }

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 
-import { fetchEvents, type Domain, type EventSummary, type EventsPage, type NewsItem, type Trend, type TrendingEventItem } from "../lib/api";
+import { fetchEvents, type Domain, type EventSummary, type EventsPage, type ExternalRanking, type NewsItem, type Trend, type TrendingEventItem } from "../lib/api";
 import { common, formatDateTime, type Locale } from "../lib/i18n";
 
 export const DOMAINS: Domain[] = ["computer", "finance", "gaming"];
@@ -43,8 +43,10 @@ export function TrendingEventCard({ item, locale, compact = false, showSummary =
     <ul className="rank-evidence" aria-label={t.publisherRanks}>
       {item.external_rankings.map(ranking => <li key={`${ranking.source_key}:${ranking.content_item_id}`}>
         <span>{ranking.source} · {ranking.list_name}</span> <strong className="native-rank"><span className="visually-hidden">{t.rankWord} </span>#{ranking.rank}</strong>
+        <MovementBadge ranking={ranking} locale={locale}/>
       </li>)}
     </ul>
+    {item.native_list_count > 1 && <p className="multi-list">{t.onLists(item.native_list_count, item.native_publisher_count)}</p>}
     <p className="meta">
       <span>{t.lastReported} <time dateTime={event.time.last_published_at}>{formatDateTime(event.time.last_published_at, locale)}</time></span>
       <span>{t.reports(event.content_count)}</span>
@@ -54,6 +56,22 @@ export function TrendingEventCard({ item, locale, compact = false, showSummary =
       {item.topics.map(topic => <li key={topic.id}><Link href={`/subject/${topic.id}`}>{topic.display_names[locale]}</Link> <small>{t.subjectTag}</small></li>)}
     </ul>}
   </li>;
+}
+
+/**
+ * Trending-2: the change of one article's rank within one publisher list since that list's previous
+ * stored snapshot (↑5, ↓2, —, NEW). Nothing is shown when no comparable previous snapshot exists.
+ * A same-list fact, never a score.
+ */
+function MovementBadge({ ranking, locale }: { ranking: ExternalRanking; locale: Locale }) {
+  const t = common[locale];
+  const { movement, rank_delta: delta } = ranking;
+  if (!movement) return null;
+  const [text, label] = movement === "up" && delta !== null ? [`↑${delta}`, t.movement.up(delta)]
+    : movement === "down" && delta !== null ? [`↓${-delta}`, t.movement.down(-delta)]
+    : movement === "stable" ? ["—", t.movement.stable]
+    : ranking.reentered ? [t.backBadge, t.movement.reentered] : [t.newBadge, t.movement.new];
+  return <span className={`rank-move ${movement}`} title={label}><span aria-hidden="true">{text}</span><span className="visually-hidden">{label}</span></span>;
 }
 
 /** A publisher-stated list window, e.g. `day:2026-09-30`; null when the publisher states none. */

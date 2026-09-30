@@ -405,6 +405,7 @@ def test_domain_without_a_ranked_snapshot_is_unavailable(db, registry):
     assert finance == {
         "domain": "finance",
         "status": "unavailable",
+        "selection": "native",
         "ordering": "list_catalog_order_then_native_rank",
         "lists": [],
         "total": 0,
@@ -435,7 +436,16 @@ def test_trending_api_is_event_centric(db, registry):
     gaming = body["domains"][0]
     assert gaming["total"] == 3 and len(gaming["items"]) == 1
     card = gaming["items"][0]
-    assert set(card) == {"event", "external_rankings", "topics", "summary"}
+    assert set(card) == {
+        "event",
+        "external_rankings",
+        "topics",
+        "summary",
+        # Trending-2: descriptive multi-list evidence (never a score).
+        "native_list_count",
+        "native_publisher_count",
+        "native_publishers",
+    }
     # Product-1: the listed articles carry no excerpt and no AI exists, so there is no summary.
     assert card["summary"] is None
     assert set(card["external_rankings"][0]) >= {"source", "list_name", "rank", "observed_at"}
@@ -690,3 +700,245 @@ def test_topics_come_from_the_existing_linker_and_are_never_invented(db, registr
     cards = trending(db, "gaming")["domains"][0]["items"]
     assert [[t["id"] for t in card["topics"]] for card in cards] == [[str(game.id)], []]
     assert cards[0]["topics"][0]["strategy"] == "content_subject_link"
+
+
+# --- Trending-2: same-list movement, multi-list evidence, Home selection -----------------------
+
+
+def _snapshot(db, definition, rows, run, observed, window=None):
+    """``rows``: [(rank, key, published)] stored as one snapshot of ``definition``. The same key
+    on two lists is the same story (identical headline, so one Event)."""
+
+    base = definition.url.rstrip("/")
+    persist_news_ranking(
+        db,
+        definition,
+        [
+            ranked(rank, f"{base}/{key}", f"Harbor bulletin story {key}", published, observed)
+            for rank, key, published in rows
+        ],
+        run,
+        window=window,
+    )
+    return {(definition.key, key): content_id(db, f"{base}/{key}") for _, key, _ in rows}
+
+
+def _rankings_by_url(domain_result, source_key="t_popular"):
+    """External rankings of one list, keyed by the article's URL tail."""
+
+    return {
+        ranking["url"].rsplit("/", 1)[1]: ranking
+        for card in domain_result["items"]
+        for ranking in card["external_rankings"]
+        if ranking["source_key"] == source_key
+    }
+
+
+def test_rank_movement_compares_only_the_same_list(db, registry):
+    popular, hot = registry["lists"]["t_popular"], registry["lists"]["t_hot"]
+    t1 = T0 + timedelta(hours=1)
+    first = [(rank, f"p{rank}", T0) for rank in range(1, 9)]
+    ids = _snapshot(db, popular, first, "run:1", T0)
+    second = [
+        (1, "p1", T0),
+        (2, "p3", T0),
+        (3, "p8", T0),
+        (4, "p4", T0),
+        (5, "p5", T0),
+        (6, "new", t1),
+        (7, "p2", T0),
+        (8, "p6", T0),
+    ]
+    ids |= _snapshot(db, popular, second, "run:2", t1)
+    # The other list has one snapshot only: its ranks are never compared with Popular Posts.
+    ids |= _snapshot(db, hot, [(1, "p8", T0), (2, "h2", T0)], "run:2", t1)
+    build_events(db, content_ids=list(ids.values()))
+    gaming = trending(db, "gaming", limit=None)["domains"][0]
+    lists = {row["source_key"]: row for row in gaming["lists"]}
+    assert lists["t_popular"]["movement_comparable"] is True
+    assert lists["t_popular"]["previous_observed_at"] == T0.isoformat()
+    assert lists["t_hot"]["movement_comparable"] is False
+    assert lists["t_hot"]["movement_unavailable_reason"] == "no_previous_snapshot"
+    rows = _rankings_by_url(gaming)
+    moves = {
+        key: (row["previous_rank"], row["rank_delta"], row["movement"]) for key, row in rows.items()
+    }
+    assert moves["p8"] == (8, 5, "up")
+    assert moves["p2"] == (2, -5, "down")
+    assert moves["p4"] == (4, 0, "stable")
+    assert moves["new"] == (None, None, "new")
+    assert rows["new"]["reentered"] is False and rows["new"]["first_ranked_at"] == t1.isoformat()
+    assert rows["p1"]["first_ranked_at"] == T0.isoformat()
+    hot_rows = _rankings_by_url(gaming, "t_hot")
+    assert {key: row["movement"] for key, row in hot_rows.items()} == {"p8": None, "h2": None}
+    # p8 is one Event on two lists: each external rank keeps its own movement.
+    card = next(c for c in gaming["items"] if len(c["external_rankings"]) == 2)
+    assert [(r["source_key"], r["rank"], r["movement"]) for r in card["external_rankings"]] == [
+        ("t_popular", 3, "up"),
+        ("t_hot", 1, None),
+    ]
+    assert card["native_list_count"] == 2 and card["native_publisher_count"] == 2
+    assert card["native_publishers"] == [registry["names"]["popular"], registry["names"]["hot"]]
+    # Native order is unchanged by movement (Popular Posts in its own order first).
+    assert [c["external_rankings"][0]["rank"] for c in gaming["items"][:8]] == list(range(1, 9))
+    assert not keys_of(gaming) & FORBIDDEN
+
+
+def test_a_returning_article_is_marked_reentered_and_windows_are_not_compared(db, registry):
+    popular, clicks = registry["lists"]["t_popular"], registry["lists"]["t_clicks"]
+    t1, t2 = T0 + timedelta(hours=1), T0 + timedelta(hours=2)
+    ids = _snapshot(db, popular, [(1, "r", T0), (2, "s", T0)], "run:1", T0)
+    ids |= _snapshot(db, popular, [(1, "s", T0)], "run:2", t1)
+    ids |= _snapshot(db, popular, [(1, "s", T0), (2, "r", T0)], "run:3", t2)
+    build_events(db, content_ids=list(ids.values()))
+    rows = _rankings_by_url(trending(db, "gaming")["domains"][0])
+    assert (rows["r"]["movement"], rows["r"]["reentered"]) == ("new", True)
+    assert rows["r"]["first_ranked_at"] == T0.isoformat()
+    assert (rows["s"]["movement"], rows["s"]["rank_delta"]) == ("stable", 0)
+    # A daily list of another date is a different list: no movement across windows.
+    ids = _snapshot(db, clicks, [(1, "k", T0)], "run:1", T0, "day:2033-05-31")
+    ids |= _snapshot(db, clicks, [(1, "k", T0)], "run:2", t1, "day:2033-06-01")
+    build_events(db, content_ids=list(ids.values()))
+    finance = trending(db, "finance")["domains"][0]
+    assert finance["lists"][0]["window"] == "day:2033-06-01"
+    assert finance["lists"][0]["movement_unavailable_reason"] == "window_changed"
+    assert finance["items"][0]["external_rankings"][0]["movement"] is None
+
+
+def _home_world(db, registry):
+    """Popular Posts: A #1, X #2, B #3 · 近期热门: X #1, OLD #2, C #3, D #4 (OLD is 3 days old)."""
+
+    popular, hot = registry["lists"]["t_popular"], registry["lists"]["t_hot"]
+    old = T0 - timedelta(days=3)
+    base_p, base_h = popular.url.rstrip("/"), hot.url.rstrip("/")
+    shared = "Harbor Lights delayed to spring 2034"
+    persist_news_ranking(
+        db,
+        popular,
+        [
+            ranked(1, f"{base_p}/a", "Nebula Forge announces a new strategy game"),
+            ranked(2, f"{base_p}/x", shared),
+            ranked(3, f"{base_p}/b", "Quiet Orchard sells one million copies"),
+        ],
+        "run:1",
+    )
+    persist_news_ranking(
+        db,
+        hot,
+        [
+            ranked(1, f"{base_h}/x", shared),
+            ranked(2, f"{base_h}/old", "Ancient Relic remaster announced", published=old),
+            ranked(3, f"{base_h}/c", "Tidal Circuit adds cross-play support"),
+            ranked(4, f"{base_h}/d", "Copper Valley opens a new studio"),
+        ],
+        "run:1",
+    )
+    urls = {
+        "a": base_p,
+        "x": base_p,
+        "b": base_p,
+        "x2": base_h,
+        "old": base_h,
+        "c": base_h,
+        "d": base_h,
+    }
+    ids = {key: content_id(db, f"{base}/{key.rstrip('2')}") for key, base in urls.items()}
+    build_events(db, content_ids=list(ids.values()))
+    assert _event_of(db, ids["x"]) == _event_of(db, ids["x2"])
+    return {key: str(_event_of(db, value)) for key, value in ids.items()}
+
+
+def test_home_selection_alternates_lists_dedupes_and_skips_old_events(db, registry):
+    events = _home_world(db, registry)
+    home = trending(db, "gaming", limit=4, selection="home")["domains"][0]
+    assert home["selection"] == "home" and home["ordering"] == "home_list_round_robin"
+    # Popular #1, 近期热门 #1 (= X), Popular #2 is X again → Popular #3, then 近期热门 #3
+    # (#2 is three days old and not Home-eligible).
+    assert [card["event"]["id"] for card in home["items"]] == [
+        events["a"],
+        events["x"],
+        events["b"],
+        events["c"],
+    ]
+    x_card = home["items"][1]
+    assert [(r["source_key"], r["rank"]) for r in x_card["external_rankings"]] == [
+        ("t_popular", 2),
+        ("t_hot", 1),
+    ]
+    assert x_card["native_list_count"] == 2
+    assert home["home_eligibility"] == {
+        "rule": "latest_report_within_hours_of_list_observation",
+        "max_report_age_hours": 48,
+        "eligible_count": 5,
+        "excluded_count": 1,
+    }
+    assert home["total"] == 5
+    # /trending still shows the old Event at its native rank; the Home rule never touches it.
+    native = trending(db, "gaming", limit=None)["domains"][0]
+    assert events["old"] in [card["event"]["id"] for card in native["items"]]
+    assert native["ordering"] == "list_catalog_order_then_native_rank"
+    assert "home_eligibility" not in native
+    assert not keys_of(home) & FORBIDDEN
+
+
+def test_home_shows_fewer_cards_when_too_few_events_are_recent(db, registry):
+    popular = registry["lists"]["t_popular"]
+    old = T0 - timedelta(days=5)
+    ids = _snapshot(db, popular, [(1, "o1", old), (2, "f1", T0), (3, "o2", old)], "run:1", T0)
+    build_events(db, content_ids=list(ids.values()))
+    home = trending(db, "gaming", limit=4, selection="home")["domains"][0]
+    assert [card["external_rankings"][0]["rank"] for card in home["items"]] == [2]
+    assert home["total"] == 1 and home["home_eligibility"]["excluded_count"] == 2
+
+
+def test_trending_api_selection_is_additive_and_validated(db, registry):
+    _home_world(db, registry)
+    app = create_app(get_settings())
+    app.dependency_overrides[get_db_session] = lambda: db
+    with TestClient(app) as client:
+        home = client.get(
+            "/api/v1/trending", params={"domain": "gaming", "limit": 4, "selection": "home"}
+        )
+        native = client.get("/api/v1/trending", params={"domain": "gaming"}).json()
+        assert client.get("/api/v1/trending", params={"selection": "score"}).status_code == 422
+    assert home.status_code == 200
+    body = home.json()["domains"][0]
+    assert len(body["items"]) == 4 and body["home_eligibility"]["max_report_age_hours"] == 48
+    ranking = native["domains"][0]["items"][0]["external_rankings"][0]
+    assert {
+        "rank",
+        "previous_rank",
+        "rank_delta",
+        "movement",
+        "previous_observed_at",
+        "first_ranked_at",
+        "reentered",
+    } <= set(ranking)
+    assert not keys_of(body) & FORBIDDEN and not keys_of(native) & FORBIDDEN
+
+
+def test_trending_query_count_does_not_grow_with_listed_articles(db, registry, connection):
+    from sqlalchemy import event as sa_event
+
+    popular = registry["lists"]["t_popular"]
+    statements = []
+
+    def count(*_args):
+        statements.append(1)
+
+    def measure():
+        statements.clear()
+        sa_event.listen(connection, "before_cursor_execute", count)
+        try:
+            trending_service.domain_trending(db, "gaming", limit=None, summaries=False)
+        finally:
+            sa_event.remove(connection, "before_cursor_execute", count)
+        return len(statements)
+
+    ids = _snapshot(db, popular, [(r, f"q{r}", T0) for r in range(1, 4)], "run:1", T0)
+    build_events(db, content_ids=list(ids.values()))
+    small = measure()
+    t1 = T0 + timedelta(hours=1)
+    ids = _snapshot(db, popular, [(r, f"q{r}", T0) for r in range(1, 13)], "run:2", t1)
+    build_events(db, content_ids=list(ids.values()))
+    assert measure() == small

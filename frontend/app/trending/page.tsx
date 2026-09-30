@@ -14,11 +14,14 @@ const copy = {
     eyebrow: "Discover", title: "Trending",
     intro: "Events reported by the articles that publishers list on their own popularity rankings.",
     rankedLists: "Publisher lists", observed: "observed",
+    comparedWith: "movement vs.", noMovement: {no_previous_snapshot: "first collection, no movement yet", window_changed: "new day's list, no movement yet", list_changed: "list changed, no movement"},
     methodologyText: [
       "Each card is an event. Its reports appear on publishers' own ranked lists, such as a click ranking or a popular-posts list. The number shown (#2) is the publisher's own position in that list, exactly as published.",
       "Ranks from different publishers are not comparable and are never combined. There is no platform popularity, trend or hotness score.",
       "Each list keeps its publisher's own name and time scope: a daily list covers the publisher's calendar day so far (新浪财经 uses the Beijing date), and lists that state no period, such as Popular Posts or 近期热门, are not given one.",
       "Display order: the lists in a fixed order, each in its publisher's own order; an event listed more than once appears once, at its first listing, with every rank shown. The order is not our judgement of popularity.",
+      "Movement (↑3, ↓2, —, NEW) compares an article's position with the previous time we collected the same list: only within one list, never across publishers. A daily list is only compared with the same day's list. When a list has no earlier collection, no movement is shown.",
+      "An event on several lists shows each list's rank separately; being on more lists is evidence, not a score, and does not change the order.",
       "Topics are subjects linked to the event on exact evidence. They are context, not what is trending.",
       "Lists that rank games, coins, stocks or repositories rather than articles appear on Today, not here.",
     ],
@@ -32,11 +35,14 @@ const copy = {
     eyebrow: "发现", title: "热门",
     intro: "发布方在自有热门榜单中列出的文章所报道的事件。",
     rankedLists: "发布方榜单", observed: "采集于",
+    comparedWith: "名次变化对比", noMovement: {no_previous_snapshot: "首次采集，暂无名次变化", window_changed: "新一天的榜单，暂无名次变化", list_changed: "榜单已变更，不比较名次"},
     methodologyText: [
       "每张卡片是一个事件，其报道出现在发布方自有的排行榜上，例如点击量排行或热门文章列表。显示的名次（#2）是该文章在发布方榜单中的原始位置，按原样保留。",
       "不同发布方的名次不可比较，也从不合并。平台不计算任何热度、趋势或受欢迎程度分数。",
       "每个榜单保留发布方自己的名称与时间范围：日榜覆盖发布方当日至今（新浪财经按北京时间日期），未注明时间范围的榜单（如 Popular Posts、近期热门）不另加时间范围。",
       "展示顺序：各榜单按固定顺序排列，每个榜单内保持发布方自己的顺序；同一事件多次上榜只显示一次（位于首次出现处），并列出全部名次。该顺序不代表我们对热度的判断。",
+      "名次变化（↑3、↓2、—、新上榜）仅将文章在同一榜单中的位置与我们上一次采集该榜单时比较，从不跨发布方比较；日榜只与同一天的榜单比较。榜单没有更早的采集时不显示变化。",
+      "登上多个榜单的事件分别显示各榜单的名次；上榜数量是证据而非分数，也不改变展示顺序。",
       "主题是依据确切证据与事件关联的对象，仅作为背景信息，并非热门本身。",
       "对游戏、加密货币、股票或代码仓库（而非文章）排名的榜单显示在“今日”页面，不在此处。",
     ],
@@ -90,7 +96,9 @@ export default function TrendingPage() {
       {current.lists.length > 0 && <ul className="trending-lists" aria-label={t.rankedLists}>
         {current.lists.map(list => {
           const stated = listWindowLabel(list.window, locale);
-          return <li key={list.source_key}><strong>{list.source}</strong> · {list.list_name}{stated && ` (${stated})`} · {t.observed} <time dateTime={list.observed_at}>{formatDateTime(list.observed_at, locale)}</time></li>;
+          return <li key={list.source_key}><strong>{list.source}</strong> · {list.list_name}{stated && ` (${stated})`} · {t.observed} <time dateTime={list.observed_at}>{formatDateTime(list.observed_at, locale)}</time>
+            {" · "}{list.previous_observed_at ? <>{t.comparedWith} <time dateTime={list.previous_observed_at}>{formatDateTime(list.previous_observed_at, locale)}</time></> : list.movement_unavailable_reason && t.noMovement[list.movement_unavailable_reason]}
+          </li>;
         })}
       </ul>}
       {current.status !== "ready" ? <p className="notice">{t.unavailable}</p> : current.items.length === 0 ? <p className="notice">{t.empty}</p> : <>

@@ -27,6 +27,8 @@ def get_trending(
     session: Annotated[Session, Depends(get_db_session)],
     domain: str | None = Query(default=None, pattern="^(computer|finance|gaming)$"),
     limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=100),
+    selection: str = Query(default="native", pattern="^(native|home)$"),
 ):
     # Events on publishers' own ranked article lists; external ranks are evidence, never scored.
-    return trending(session, domain, limit)
+    # `selection=home` is Home's presentation sample (recent Events, lists taken in turn).
+    return trending(session, domain, limit, selection)

@@ -131,6 +131,7 @@ python -m industry_intelligence.cli rank computer
 | GET | `/api/v1/today` | Latest source-native lists |
 | GET | `/api/v1/trending` | Events on publishers' own ranked article lists, per domain, with every native rank as evidence (no score) |
 | GET | `/api/v1/trending?domain=gaming&limit=20` | One domain; optional `limit` (1–100, default 20), `total` reports the number of Event cards |
+| GET | `/api/v1/trending?limit=4&selection=home` | Home's sample (Trending-2): recent Events, the domain's publisher lists taken in turn; `selection` is `native` (default) or `home` |
 | GET | `/api/v1/subjects/{id}` | Canonical subject detail (redirect-aware) |
 | GET | `/api/v1/subjects/{id}/history?limit=30` | Composite rank history from successful runs |
 
@@ -140,9 +141,9 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 
 | Route | Purpose | Default size |
 | --- | --- | --- |
-| `/` | Event-first dashboard (Product-1) composed from existing APIs: Trending Events per domain first (publisher ranks as published; each card with one persisted summary — the Event's AI Summary, else a publisher excerpt, else none), then Today at a Glance, Latest Events, live External Company Rankings shown as published, and Explore (Companies, Search); no Home score, and nothing is generated on a page load | 4 Events per domain, 3 reports per domain, 5 Events, Top 5 per ranking |
+| `/` | Event-first dashboard (Product-1) composed from existing APIs: Trending Events per domain first (Trending-2: recent Events from the domain's publisher lists taken in turn, each Event once; publisher ranks as published; each card with one persisted summary — the Event's AI Summary, else a publisher excerpt, else none), then Today at a Glance, Latest Events, live External Company Rankings shown as published, and Explore (Companies, Search); no Home score, and nothing is generated on a page load | 4 Events per domain, 3 reports per domain, 5 Events, Top 5 per ranking |
 | `/today` | Discover · Today: source-native content, one domain tab at a time. Every domain shows Latest News first (its `news`/`feed` sources from `/api/v1/sources`, read through `/api/v1/news`); Computer and Gaming then show their source rankings, Finance shows Market Pulse in a collapsed secondary section | 5 per source, View More |
-| `/trending` | Discover · Trending (Trending-1): Event cards for the domain's publisher ranked article lists; each card shows the headline (→ Event Detail), every publisher rank exactly as published (e.g. "Gematsu · Popular Posts #2"), time, report/source counts, and Topics; lists shown with their stated window and observation time; no platform score or position | 20 events, expandable to 50 |
+| `/trending` | Discover · Trending (Trending-1): Event cards for the domain's publisher ranked article lists; each card shows the headline (→ Event Detail), every publisher rank exactly as published (e.g. "Gematsu · Popular Posts #2") with its same-list movement since the previous collection (↑3, ↓2, —, NEW; Trending-2), time, report/source counts, and Topics; lists shown with their stated window and observation time; no platform score or position | 20 events, expandable to 50 |
 | `/search` | Discover · Search: multilingual topic (Subject) search with a query and domain tabs; type, source (`searchable` keys from `/api/v1/sources`), and language are under More filters; no search-mode control (the backend default is used) | 20 per page |
 | `/subject/{id}` | Topic (Subject) Detail: current rank and trend, related Events (hidden when none), rank history, where it appears (source lists), related news collapsed (the same reports are grouped under related Events), aliases, and a collapsed Methodology note (score, observations, link rules) | 20 lists, 10 news per page, 5 related Events |
 | `/rankings` | External company rankings per domain: ranking selector (only rankings with a collected snapshot; a direct link still opens a never-collected one), one-line publisher/metric/date/coverage/original-source meta and disclaimer, a collapsed About this ranking note (cadence, acquisition, observed time, source column and description), latest snapshot table with movement, dropped entries, company names linking to Company Detail, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
@@ -1122,3 +1123,26 @@ The implementation record, source audit, 10-Event live AI audit, and verificatio
   falls back to the publisher excerpt or no summary.
 - The daily scheduled run is `--skip-ai` for now: a live check still found one blocked
   unsupported detail, and scheduled AI returns only after a clean check.
+
+## Trending-2 — Rank movement, multi-list evidence, and a source-diverse Home
+
+- **Movement stays inside one list.** Each publisher rank on a Trending card is compared with the
+  same article's rank the previous time the same list was collected: `↑5`, `↓2`, `—` (same
+  place), or `NEW` (not on that previous collection; `BACK` / 重新上榜 when it had been listed
+  before). A daily list (新浪财经) is compared only with the same day's list. When a list has no
+  earlier collection, no movement is shown. Ranks of different publishers are never compared,
+  and movement is never turned into a score or used to reorder `/trending`.
+- **Several lists are shown as evidence.** An Event on more than one publisher list shows each
+  rank separately and a line such as "On 2 publisher lists"; the count is descriptive and does
+  not change the order.
+- **Home is a sample, not a ranking.** Home's Trending Events take the domain's publisher lists in
+  turn (for Finance: 新浪财经 #1, 东方财富 #1, 新浪财经 #2, 东方财富 #2 …), each list in its own
+  order, each Event once (with all its ranks). Only Events whose latest report was published at
+  most 48 hours before the list was collected appear on Home; `/trending` still shows every listed
+  Event. When fewer recent Events exist, Home shows fewer cards. The order is presentation only.
+- The API change is additive: `/api/v1/trending` rankings gain `previous_rank`, `rank_delta`,
+  `movement`, `previous_observed_at`, `first_ranked_at`, and `reentered`; cards gain
+  `native_list_count`, `native_publisher_count`, and `native_publishers`; `selection=home`
+  returns Home's sample with its eligibility rule. There is still no score.
+
+The implementation record and live verification are in `DEVELOPMENT.md`.

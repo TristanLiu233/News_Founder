@@ -64,16 +64,31 @@ export type DisplayNames = Record<"en" | "zh-CN", string>;
  * combined, and there is no platform score. `ordering` names the display rule (lists in catalog
  * order, each in its publisher's order), which is not a popularity judgement.
  */
+/**
+ * Trending-2 movement: the same article's position in the immediately previous stored snapshot of
+ * the same publisher list (same list and stated window). `rank_delta = previous_rank - rank`
+ * (positive = moved up); `new` = absent from a complete previous snapshot; null = no comparable
+ * previous snapshot. A same-list fact, never a score; ranks of different lists are never compared.
+ */
+export type RankMovement = "new" | "up" | "down" | "stable";
 export interface ExternalRanking {
   source_key: string; source: string; list_key: string; list_name: string; ranking_kind: string;
   /** Only when the publisher states it, e.g. `day:2026-09-30` for a daily list. */
   window: string | null;
   rank: number; native_value: string | null; observed_at: string;
+  previous_rank: number | null; rank_delta: number | null; movement: RankMovement | null;
+  previous_observed_at: string | null;
+  /** Earliest stored snapshot of this list (same window) that listed the article. */
+  first_ranked_at: string | null;
+  /** `new` now, but listed in an earlier snapshot of this list. */
+  reentered: boolean;
   content_item_id: string; title: string; url: string; language: string;
 }
 export interface TrendingList {
   source_key: string; source: string; list_key: string; list_name: string; ranking_kind: string;
   window: string | null; observed_at: string; entry_count: number; pending_event_count: number;
+  previous_observed_at: string | null; movement_comparable: boolean;
+  movement_unavailable_reason: "no_previous_snapshot" | "window_changed" | "list_changed" | null;
 }
 /**
  * One short persisted summary of an Event (Product-1): the first point of its displayable AI Summary
@@ -86,10 +101,21 @@ export type EventCardSummary =
 export interface TrendingEventItem {
   event: EventSummary; external_rankings: ExternalRanking[]; topics: EventSubjectRef[];
   summary: EventCardSummary | null;
+  /** Distinct publisher lists / publishers listing the Event: descriptive evidence only. */
+  native_list_count: number; native_publisher_count: number; native_publishers: string[];
+}
+/**
+ * `selection=home` (Home only): Events whose latest report is at most `max_report_age_hours` older
+ * than the list observation, one list at a time in each list's own order, each Event once. A
+ * presentation sample, not an overall rank.
+ */
+export interface HomeEligibility {
+  rule: string; max_report_age_hours: number; eligible_count: number; excluded_count: number;
 }
 export interface TrendingDomain {
-  domain: Domain; status: "ready" | "unavailable"; ordering: string;
+  domain: Domain; status: "ready" | "unavailable"; selection: "native" | "home"; ordering: string;
   lists: TrendingList[]; total: number; items: TrendingEventItem[];
+  home_eligibility?: HomeEligibility;
 }
 export interface TrendingResponse {
   generated_at: string;
@@ -361,7 +387,7 @@ export function fetchToday(signal?: AbortSignal): Promise<TodayResponse> {
 }
 
 export function fetchTrending(
-  signal?: AbortSignal, options: {domain?: Domain; limit?: number} = {},
+  signal?: AbortSignal, options: {domain?: Domain; limit?: number; selection?: "native" | "home"} = {},
 ): Promise<TrendingResponse> {
   return getJson("/api/v1/trending", options, signal);
 }

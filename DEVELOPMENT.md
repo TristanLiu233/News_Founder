@@ -32,9 +32,9 @@ planned or speculative results in a finished entry.
 
 ## Current Baseline
 
-- Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1 and Product-1).
-- Backend: pytest 853 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
-  `industry_intelligence_test`; unit 640; Ruff check and format check clean (after Product-1.1).
+- Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1, Product-1, Trending-2).
+- Backend: pytest 867 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
+  `industry_intelligence_test`; unit 648; Ruff check and format check clean (after Trending-2).
 - Frontend: ESLint, TypeScript, and the Next.js production build (11 routes) pass.
 - Live dev database: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health`
   30/30 healthy (25 earlier sources + 5 publisher ranked lists).
@@ -955,3 +955,175 @@ info, `source-health` 30/30 healthy.
 
 Owner decision on re-enabling scheduled AI: a further Summary prompt version (or leaving
 headline-only Summaries ungenerated), then a fresh zero-finding live smoke.
+
+## 2026-09-30 — Trending-2 — Rank Movement & Source Diversity
+
+Status: complete (2026-09-30). No migration. Scheduled AI stays `--skip-ai`.
+
+### Starting state
+
+- Branch `phase-7` at `992d9e8` ("fix: harden AI grounding and gate generation by evidence
+  quality"), clean working tree, no remote. Alembic head `20260930_12`.
+- Baseline (actual, rerun first): pytest **853 passed, 1 skipped** (pre-existing Hacker News skip,
+  isolated `industry_intelligence_test`); Ruff check clean, Ruff format check clean (180 files);
+  `data-quality-audit` 0 errors / 0 warnings / 6 info (exit 0); frontend ESLint and TypeScript
+  pass; Next.js production build passes with 11 routes (isolated scratchpad copy).
+- Scheduler: local launchd and production systemd both run `intelligence-update --skip-ai`.
+
+### Scope / exclusions
+
+In scope: same-list native rank movement from stored snapshot history, multi-list evidence
+metadata, a deterministic source-diverse Home selection, and a Home-only freshness eligibility
+rule. Excluded: scheduled AI (stays `--skip-ai`) and every AI prompt/validator/selection change,
+provider requests, new sources or ranked lists, any score/combined rank/RRF/weighting, Event,
+Subject, Company, Topic, or clustering changes, the Gematsu duplicate, Today/Search/Rankings
+redesign, scheduler time, local DB and deployment architecture, push.
+
+### Snapshot-history audit (read-only, live dev DB, 2026-09-30 12:00Z)
+
+Ranked-list snapshots are `IngestionBatch` rows (`result.kind = news_ranking`, `result.entries =
+[{rank, content_item_id, native_value}]`, plus `list_key`, `ranking_kind`, `window`,
+`invalid_count`, `failed_count`); `result` is a `json` column; unique `(source_key, batch_key)`
+and `(rank_list_id, observed_at)`.
+
+| Source / list | Snapshots | Latest | Previous | Movement comparable |
+| --- | --- | --- | --- | --- |
+| Hacker News · Top Stories | 2 | 04:28:06Z | 03:46:13Z | yes |
+| 新浪财经 · 点击量排行 (`day:2026-09-30`) | 1 | 03:44:59Z | — | no (no previous) |
+| 东方财富 · 网友点击排行榜 | 1 | 07:56:04Z | — | no (no previous) |
+| Gematsu · Popular Posts | 2 | 04:28:09Z | 03:45:00Z | yes |
+| 3DM · 近期热门 | 1 | 03:45:11Z | — | no (no previous) |
+
+No snapshot has rejected rows. No extra ingestion was run: two comparable lists already exhibit
+every movement state; Finance and 3DM gain a previous snapshot with the next scheduled run.
+
+### Age distribution of current Trending Events (read-only)
+
+Report age = the Event's latest report publication time measured at the list's observation.
+Hacker News (30): median ≈ 12.5 h, max 81.5 h, 6 over 24 h, 5 over 48 h. 新浪财经 (20): median
+≈ 4.9 h, max 11.5 h. 东方财富 (10): median ≈ 21 h, max 23.5 h. Gematsu (4): 9.9–28.1 h (2 over
+24 h). 3DM (8): 17.0–137.3 h, median ≈ 110 h (6 over 48 h; the list keeps week-old posts).
+
+### Design decisions
+
+- **Movement** (`list_comparison`, `rank_movement`): the same `content_item_id` in the
+  immediately previous snapshot of the same `source_key`; comparable only when `list_key`,
+  `ranking_kind`, and the publisher-stated `window` are equal (a 新浪财经 list of another Beijing
+  date is another list: `window_changed`). `rank_delta = previous_rank - current_rank`;
+  `up`/`down`/`stable`; `new` = absent from a complete previous snapshot; `None` = not comparable
+  (`no_previous_snapshot`, `window_changed`, `list_changed`) or absent from a previous snapshot
+  that dropped rows (never guessed). Identity is the article, not the Event, so two articles of
+  one Event keep independent movement. Ranks of different lists/publishers are never compared;
+  movement never reorders anything.
+- **NEW vs re-entered**: `first_ranked_at` = earliest stored snapshot of the list (same window)
+  that listed the article; `reentered` = `new` now but listed before (UI `BACK` / 重新上榜).
+  `consecutive_snapshots` was not added (needs ordered history traversal).
+- **Multi-list evidence**: `native_list_count` (distinct `source_key`, i.e. publisher + list),
+  `native_publisher_count`, `native_publishers`; the UI line distinguishes lists from publishers
+  when they differ. Live multi-list Events: **0** (Finance 30 = 20 + 10, Gaming 12 = 4 + 8), so the
+  optional "Across Multiple Lists" section was **deferred**.
+- **Home selection** (`selection=home`, `home_round_robin`): lists in catalog order, each list's
+  next not-yet-taken eligible Event in its native order, in turn, until the limit (Home: 4); a
+  shared Event appears once with every rank; a list that runs out is skipped. A presentation
+  order, not a rank. Computer has one list, so its native order is kept.
+- **Home eligibility** (`home_eligible`): the Event's `last_published_at` at most 48 h before the
+  most recent observation of a list that lists it. 24 h (the smaller day multiple) left Gaming
+  with 3 eligible Events for 4 slots and put 东方财富 (max 23.5 h) at the edge depending on the
+  run hour; 48 h fills every domain (computer 27/30, finance 30/30, gaming 6/12) and excludes
+  3DM's multi-day posts and HN's 2–3-day-old stories. Measured at list observation, so the result
+  is deterministic between runs. Fallback: fewer cards, never filler. `/trending` never filters.
+- **API**: additive fields on the existing endpoint (below); `selection` validated
+  (`native|home`, else 422). The response key `freshness` stays forbidden (legacy RRF term), so
+  the Home rule is reported as `home_eligibility`.
+
+### Data-model decision
+
+No migration. Movement, first listings, and multi-list counts are derived on read from the
+existing `IngestionBatch` history; nothing is persisted.
+
+### Backend changes
+
+`services/trending.py`: `snapshot_pairs` (latest + previous snapshot per list, one
+`row_number()` query; `current_snapshots` kept on top of it), `list_comparison`, `rank_movement`,
+`first_rankings` (one aggregate query, `json_array_elements`), `native_list_evidence`,
+`resolve_owners` (batched; `resolve_event_redirect` only for redirected or retired owners),
+`home_eligible`, `home_round_robin`, `domain_trending(..., selection=)`, `trending(...,
+selection=)`. `api/sources.py`: `selection` query parameter.
+
+API (additive) — per list: `previous_observed_at`, `movement_comparable`,
+`movement_unavailable_reason`; per external ranking: `previous_rank`, `rank_delta`, `movement`,
+`previous_observed_at`, `first_ranked_at`, `reentered` (`rank` unchanged); per card:
+`native_list_count`, `native_publisher_count`, `native_publishers`; per domain: `selection`, and
+with `selection=home` `ordering: home_list_round_robin` and `home_eligibility {rule,
+max_report_age_hours, eligible_count, excluded_count}`. No score or combined rank.
+
+### Query strategy
+
+Before: one latest-snapshot query per list plus two queries per listed Event
+(`resolve_event_redirect`). After: one windowed snapshot query, one first-listing aggregate,
+batched content/owner/redirect/Event lookups, then the existing batched coverage, subject,
+company, and summary reads. Live per-domain statements (native, `limit=None`): computer 77 → 20,
+finance 75 → 17, gaming 39 → 17; Home 19/16/16. A PostgreSQL test pins that the count does not
+grow when a list grows from 3 to 12 articles. No cache was added.
+
+### Frontend changes
+
+`lib/api.ts` (types `RankMovement`, new fields, `HomeEligibility`, `fetchTrending` `selection`),
+`lib/i18n.tsx` (movement and multi-list strings, both locales), `components/shared.tsx`
+(`MovementBadge` after each rank chip: ↑n, ↓n, —, NEW/新上榜, BACK/重新上榜, with a translated
+tooltip and screen-reader text; "On N publisher lists" line), `app/page.tsx` (Home requests
+`selection=home`; note "Recent events from publishers' own hot lists, taking each list in turn.
+The order is not a platform popularity score."), `app/trending/page.tsx` (each list line states
+"movement vs. <previous observation>" or why none; two methodology paragraphs),
+`app/globals.css` (badge and line styles). Publisher list names are untouched.
+
+### Tests
+
+- New `tests/unit/test_trending_movement.py` (8): up +5 / down −5 / stable / new; no previous
+  snapshot; rejected rows in the previous snapshot never give `new`; window, list, and kind
+  isolation; list vs publisher counting; round-robin alternation (Finance two lists, Computer one
+  list), shared-Event dedupe and fill, exhausted lists; the 48 h boundary and multi-list age.
+- `tests/integration/test_trending_postgres.py` +6: movement on real snapshots (#8→#3 up 5, #2→#7
+  down 5, #4 stable, new; the other list without history shows none; one Event on two lists keeps
+  independent movement; native order unchanged); re-entry and daily-window isolation; Home
+  alternation with shared-Event dedupe and a 3-day-old Event excluded from Home but kept on
+  `/trending`; fewer Home cards when too few are recent; API `selection` additive and validated
+  (422), no forbidden keys; query count constant. Two existing assertions updated for the
+  additive fields.
+- Results: pytest **867 passed, 1 skipped** (unit 648); Ruff check clean, format check clean (181
+  files); ESLint, TypeScript, Next.js production build (11 routes, isolated copy) pass.
+
+### Real-data verification (read-only)
+
+- Movement (Hacker News Top Stories, 04:28Z vs 03:46Z): up — #3 "Dots: Always-on agents" (#28,
+  ↑25), #2 PSSA (#5, ↑3), #20 "Ask HN: What are you reading?" (#22, ↑2); down — #7 "Show HN:
+  Real-time Solar System…" (#3, ↓4), #4 postal inspectors (#2, ↓2), 20 in total; stable — #1
+  Livenerf, #6, #29, #30; new — #11 "RSS Feeds for Last.fm", #23, #25 (none re-entered). Gematsu
+  Popular Posts: #1–#4 stable. 新浪财经, 东方财富, 3DM: no movement (one snapshot each).
+- Multi-list: 0 live Events on two lists.
+- Home: Computer HN #1–#4; Finance 新浪财经 #1, 东方财富 #1, 新浪财经 #2, 东方财富 #2; Gaming Gematsu #1,
+  3DM #4, Gematsu #2, 3DM #8 (3DM #1–#3, #5–#7 are 2.2–5.7 days old and excluded from Home only).
+- Browser (isolated production build on 3080 against the API on 8080, live DB): Home and
+  `/trending` in English at 1280 px and 简体中文 at 375 px; badges readable (one-line chips, max
+  Gaming card 152 px at 375 px), no horizontal overflow, headline → Event Detail works; console
+  errors 0; the browser contacted only `localhost:3080`/`8080`; API log GET only.
+- After: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health` 30/30 healthy;
+  launchd `daily_update.py` `AI_ARGS = ["--skip-ai"]` (10:00, last exit 0); production systemd
+  `intelligence-update --skip-ai`. No ingestion, provider request, or data write.
+
+### Known limitations
+
+- 新浪财经 publishes a daily list and the scheduled run is once a day, so each run is a new Beijing
+  date and Sina shows no movement (only same-day reruns compare).
+- Movement spans whatever time separates two collections of a list (`previous_observed_at`);
+  HN movement covers its tracked Top 30 (entering from #31+ reads `new`).
+- `first_ranked_at`/`reentered` cover stored history only (since Trending-1), and the
+  first-listing query grows linearly with stored snapshots.
+- Home's age rule is measured at the list observation, so if updates stop Home keeps the last
+  sample (as `/trending` does); run freshness is monitored by `update-freshness`.
+- No live multi-list Event exists, so the multi-list line is verified by tests only.
+
+### Next step
+
+Review Finance and 3DM movement after the next scheduled runs; consider an "Across Multiple
+Lists" filter once multi-list Events occur live.
