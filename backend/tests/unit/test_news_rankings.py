@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -17,25 +18,29 @@ from industry_intelligence.adapters.source.content_registry import (
     NEWS_RANKINGS,
 )
 from industry_intelligence.adapters.source.news_rankings import (
+    ArticleDetails,
     Game3DMHotAdapter,
     GematsuPopularAdapter,
     HackerNewsTopContentAdapter,
     SinaFinanceHotAdapter,
     hn_ranked_entries,
+    hn_story_id,
     parse_3dm_hot,
     parse_3dm_published,
+    parse_gematsu_article,
     parse_gematsu_popular,
     parse_sina_hot,
 )
 from industry_intelligence.domain.enums import Domain
 from industry_intelligence.infrastructure.http import HTTPClient
-from industry_intelligence.services.news_ranking_ingestion import complete_publication_times
+from industry_intelligence.services.news_ranking_ingestion import complete_article_details
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 NOW = datetime(2026, 9, 30, 0, 30, tzinfo=UTC)
 SINA = (FIXTURES / "sina_finance_hot.js").read_text(encoding="utf-8")
 GEMATSU = (FIXTURES / "gematsu_popular.html").read_text(encoding="utf-8")
 HOT_3DM = (FIXTURES / "3dm_news_hot.html").read_text(encoding="utf-8")
+GEMATSU_ARTICLE = (FIXTURES / "gematsu_article_identity.html").read_text(encoding="utf-8")
 
 
 def test_sina_click_rank_window_value_and_time_kept_exactly():
@@ -212,11 +217,7 @@ def test_gematsu_and_3dm_adapters_read_their_pages(settings):
         if request.url.host == "www.gematsu.com":
             if request.url.path == "/":
                 return httpx.Response(200, text=GEMATSU)
-            return httpx.Response(
-                200,
-                text='<meta property="article:published_time" '
-                'content="2026-09-29T15:36:59+00:00"/>',
-            )
+            return httpx.Response(200, text=GEMATSU_ARTICLE)
         if request.url.path == "/news/":
             return httpx.Response(200, text=HOT_3DM)
         return httpx.Response(200, text='{"pubDate": "2026-09-29T18:42:58"}')
@@ -228,14 +229,36 @@ def test_gematsu_and_3dm_adapters_read_their_pages(settings):
             return (
                 await gematsu.fetch(),
                 await hot.fetch(),
-                await gematsu.published_at("https://www.gematsu.com/2026/09/x"),
-                await hot.published_at("https://www.3dmgame.com/news/202609/1.html"),
+                await gematsu.article_details("https://www.gematsu.com/2026/09/x"),
+                await hot.article_details("https://www.3dmgame.com/news/202609/1.html"),
             )
 
-    gematsu, hot, gematsu_time, hot_time = asyncio.run(run())
+    gematsu, hot, gematsu_article, hot_article = asyncio.run(run())
     assert len(gematsu) == 4 and [entry.rank for entry in hot] == [1, 2, 3]
-    assert gematsu_time == datetime(2026, 9, 29, 15, 36, 59, tzinfo=UTC)
-    assert hot_time == datetime(2026, 9, 29, 10, 42, 58, tzinfo=UTC)
+    assert gematsu_article == ArticleDetails(
+        datetime(2026, 9, 29, 15, 36, 59, tzinfo=UTC), "https://www.gematsu.com/?p=1081377"
+    )
+    # 3DM rows already carry the article number; the page only adds the time.
+    assert hot_article == ArticleDetails(datetime(2026, 9, 29, 10, 42, 58, tzinfo=UTC), None)
+
+
+def test_gematsu_article_id_is_the_wordpress_post_id_in_the_rss_guid_form():
+    details = parse_gematsu_article(GEMATSU_ARTICLE)
+    assert details.external_id == "https://www.gematsu.com/?p=1081377"
+    assert details.published_at == datetime(2026, 9, 29, 15, 36, 59, tzinfo=UTC)
+
+
+def test_gematsu_article_id_fails_closed_when_markers_disagree_or_are_missing():
+    other_body = GEMATSU_ARTICLE.replace("postid-1081377", "postid-1081378")
+    assert parse_gematsu_article(other_body).external_id is None
+    no_rest = GEMATSU_ARTICLE.replace("wp-json/wp/v2/posts/1081377", "wp-json/")
+    assert parse_gematsu_article(no_rest).external_id is None
+    # Another site's REST link is never taken as a Gematsu post.
+    foreign = GEMATSU_ARTICLE.replace(
+        "https://www.gematsu.com/wp-json/wp/v2/posts/", "https://evil.example/wp-json/wp/v2/posts/"
+    )
+    assert parse_gematsu_article(foreign).external_id is None
+    assert parse_gematsu_article("<html></html>") == ArticleDetails(None, None)
 
 
 def test_hacker_news_adapter_reuses_top_stories(settings):
@@ -267,30 +290,96 @@ def test_hacker_news_adapter_reuses_top_stories(settings):
     assert entries[0].item.published_at == datetime.fromtimestamp(1790726400, UTC)
 
 
+def test_hn_entries_from_the_stored_ranking_snapshot():
+    observations = [
+        SimpleNamespace(
+            rank=1,
+            title="Show HN: A thing",
+            url="https://example.com/thing",
+            raw_metric=181,
+            observed_at=NOW,
+            item_metadata={
+                "hn_url": "https://news.ycombinator.com/item?id=42",
+                "author": "pg",
+                "comments": 7,
+                "metric_label": "points",
+                "time": 1790726400,
+            },
+        ),
+        # Stored before Trending-1: no ``time`` — the date stays unknown, never guessed.
+        SimpleNamespace(
+            rank=3,
+            title="Ask HN: Why?",
+            url="https://news.ycombinator.com/item?id=43",
+            raw_metric=None,
+            observed_at=NOW,
+            item_metadata={"hn_url": "https://news.ycombinator.com/item?id=43"},
+        ),
+    ]
+    entries = HackerNewsTopContentAdapter.entries_from_observations(observations)
+    assert [(e.rank, e.item.external_id, e.native_value) for e in entries] == [
+        (1, "42", "181"),
+        (3, "43", None),
+    ]
+    assert entries[0].item.published_at == datetime.fromtimestamp(1790726400, UTC)
+    assert entries[1].item.published_at is None
+    assert hn_story_id("https://news.ycombinator.com/item?id=x") is None
+    assert hn_story_id(None) is None
+
+
+def test_list_semantics_are_the_publishers_own():
+    semantics = {key: (d.list_key, d.list_name, d.ranking_kind) for key, d in NEWS_RANKINGS.items()}
+    assert semantics == {
+        "sina_finance_hot": ("news_click_day", "热门新闻排行 · 新闻榜 · 点击量排行", "click_count"),
+        "gematsu_popular": ("popular_posts", "Popular Posts", "popular"),
+        "game_3dm_hot": ("recent_hot", "近期热门", "hot"),
+        "hacker_news_top": ("top_stories", "Top Stories", "top"),
+    }
+    for values in semantics.values():
+        text = " ".join(values).lower()
+        assert "24" not in text and "rolling" not in text
+        assert "today" not in text and "今日" not in text
+    # Only Sina states a period: the publisher's daily list for a Beijing calendar date.
+    _, _, window = parse_sina_hot(SINA, NOW)
+    assert window == "day:2026-09-30"
+    assert parse_3dm_hot(HOT_3DM, NOW) and NEWS_RANKINGS["hacker_news_top"].reuse_ranking == (
+        "hacker_news"
+    )
+
+
 class _Lookup:
     lookup_delay = 10.0
+    lookup_articles = True
 
-    def __init__(self, times):
-        self.times, self.calls = times, []
+    def __init__(self, details):
+        self.details, self.calls = details, []
 
-    async def published_at(self, url):
+    async def article_details(self, url):
         self.calls.append(url)
-        value = self.times.get(url)
+        value = self.details.get(url)
         if isinstance(value, Exception):
             raise value
         return value
 
 
-def _entry(rank, url, published=None):
-    return RankedContentItem(rank, ContentSourceItem(None, url, url, published, NOW, "en"))
+def _entry(rank, url, published=None, external_id=None):
+    return RankedContentItem(rank, ContentSourceItem(external_id, url, url, published, NOW, "en"))
 
 
-def test_publication_lookup_only_for_new_undated_articles_with_crawl_delay():
+def test_article_lookup_only_for_new_entries_missing_a_date_or_id_with_crawl_delay():
     known = "https://www.gematsu.com/known"
+    complete = "https://www.gematsu.com/complete"
     dated = "https://www.gematsu.com/dated"
     new = "https://www.gematsu.com/new"
     broken = "https://www.gematsu.com/broken"
-    adapter = _Lookup({new: datetime(2026, 9, 29, tzinfo=UTC), broken: RuntimeError()})
+    found = ArticleDetails(datetime(2026, 9, 29, tzinfo=UTC), "https://www.gematsu.com/?p=7")
+    adapter = _Lookup(
+        {
+            new: found,
+            dated: ArticleDetails(datetime(2020, 1, 1, tzinfo=UTC), "https://www.gematsu.com/?p=8"),
+            broken: RuntimeError(),
+        }
+    )
     sleeps = []
 
     async def sleep(seconds):
@@ -298,17 +387,34 @@ def test_publication_lookup_only_for_new_undated_articles_with_crawl_delay():
 
     entries = [
         _entry(1, known),
-        _entry(2, dated, datetime(2026, 9, 28, tzinfo=UTC)),
-        _entry(3, new),
-        _entry(4, broken),
+        _entry(2, complete, datetime(2026, 9, 28, tzinfo=UTC), "https://www.gematsu.com/?p=6"),
+        _entry(3, dated, datetime(2026, 9, 28, tzinfo=UTC)),
+        _entry(4, new),
+        _entry(5, broken),
     ]
     completed, counts = asyncio.run(
-        complete_publication_times(adapter, entries, {known}, sleep=sleep)
+        complete_article_details(adapter, entries, {known}, sleep=sleep)
     )
-    assert adapter.calls == [new, broken]
-    assert sleeps == [10.0, 10.0]
-    assert counts == {"lookups": 2, "found": 1}
-    assert [entry.rank for entry in completed] == [1, 2, 3, 4]
-    assert completed[2].item.published_at == datetime(2026, 9, 29, tzinfo=UTC)
-    # A failed lookup leaves the time unknown; the known article is untouched.
-    assert completed[3].item.published_at is None and completed[0].item.published_at is None
+    assert adapter.calls == [dated, new, broken]
+    assert sleeps == [10.0, 10.0, 10.0]
+    assert counts == {"lookups": 3, "dates_found": 1, "ids_found": 2}
+    assert [entry.rank for entry in completed] == [1, 2, 3, 4, 5]
+    # The row's own date is kept; only the missing ID is added.
+    assert completed[2].item.published_at == datetime(2026, 9, 28, tzinfo=UTC)
+    assert completed[2].item.external_id == "https://www.gematsu.com/?p=8"
+    assert (completed[3].item.published_at, completed[3].item.external_id) == (
+        found.published_at,
+        found.external_id,
+    )
+    # A failed lookup leaves both unknown; the known article is untouched.
+    assert (completed[4].item.published_at, completed[4].item.external_id) == (None, None)
+    assert completed[0].item.external_id is None
+
+
+def test_adapters_without_article_pages_are_never_looked_up():
+    adapter = _Lookup({})
+    adapter.lookup_articles = False
+    completed, counts = asyncio.run(
+        complete_article_details(adapter, [_entry(1, "https://a.example/x")], set())
+    )
+    assert adapter.calls == [] and counts["lookups"] == 0 and len(completed) == 1

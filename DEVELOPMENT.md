@@ -29,8 +29,9 @@ planned or speculative results in a finished entry.
 ## Current Baseline
 
 - Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1).
-- Backend: pytest 776 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
-  `industry_intelligence_test`; Ruff check and format check clean (after Trending-1).
+- Backend: pytest 785 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
+  `industry_intelligence_test`; unit 585; Ruff check and format check clean (after
+  Trending-1.1).
 - Frontend: ESLint, TypeScript, and the Next.js production build (11 routes) pass.
 - Live dev database: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health`
   29/29 healthy (25 earlier sources + 4 publisher ranked lists).
@@ -315,3 +316,184 @@ None. Alembic head stays `20260930_12`.
 Owner review. Candidates: Computer ranked article lists from IT之家 日榜 / 虎嗅 (URL mapping to
 the RSS), reuse of the HN ranking snapshot to avoid the duplicate request, and Topic coverage
 for ranked articles (catalog work, never relaxed linking).
+
+## 2026-09-30 — Trending-1.1 Hardening & Deduplication
+
+Status: complete (2026-09-30). Not committed (owner instruction: no commit, no push).
+
+### Goal
+
+Harden Trending-1 for the four issues found in its live smoke, without new publishers or a
+Trending redesign: (A) Hacker News Top Stories fetched twice per daily run; (B) no Topics on
+live Trending cards; (C) a publisher-edited URL created a duplicate article and Event;
+(D) ranking time semantics must stay exactly publisher-specific.
+
+### Starting state
+
+`phase-7` at `3764f67`, clean tree, no remote. Baseline: pytest 776 passed, 1 skipped
+(isolated `industry_intelligence_test`); Ruff check/format clean (177 files);
+`data-quality-audit` 0 errors / 0 warnings / 6 info; frontend ESLint, TypeScript, and Next.js
+build (11 routes, isolated copy) pass.
+
+### Audits (before any change)
+
+A. HN duplicate fetch. (a) `/topstories.json` and (b) every `/item/<id>.json` are fetched by
+`adapters/source/hacker_news.HackerNewsAdapter.fetch` for both consumers: the Subject ranking
+(`SOURCES["hacker_news"]` → `services/source_ingestion.ingest` in the `rankings` stage) and the
+ranked article list (`NEWS_RANKINGS["hacker_news_top"]` → `HackerNewsTopContentAdapter` wraps a
+second `HackerNewsAdapter` → `services/news_ranking_ingestion.ingest_news_ranking` in the
+`content` stage). (c) The ranking path persists one `RankObservation` per story (rank, title,
+URL, points, `item_metadata` with `hn_url`, author, comments, and — since Trending-1 — the item
+`time`) plus an `IngestionBatch` keyed `update:<run-id>`. (d/e) That snapshot already holds
+everything the ranked article list needs (story ID from `hn_url`). (f) Both run in the same
+`intelligence-update` run with the same batch key, rankings stage first. Trending-1 smoke:
+31 requests for the article list on top of the ranking's 31.
+
+B. Topics. Ranked articles go through the same deterministic linker as feed content
+(`persist_news_ranking` → `link_new_content` → `link_content_items`, then the `links` stage's
+`relink_all_content` over all content, then `build_events`/`relink_all_events`); replayed rows
+were linked when first stored. Not A–D. A read-only dry-run of `relink_all_content` over the
+62 articles of the latest snapshots: 26 links, all `same_article` from HN articles to their HN
+ranked-story Subjects (excluded as Topics by design), 0 added/removed; Sina 20, Gematsu 4, and
+3DM 8 articles have 0 links. The catalog has no Subject for the games and products they name
+(巫师3, 生化危机, 卧龙, Monster Hunter, Satisfactory, Intergalactic, Gundam, 光刻机 → none; 小米
+and Windows exist only as computer-domain ranked stories, never name-linked). Cause **E**: the
+pipeline is correct and these articles have no canonical Topic.
+
+C. Article identity. `ContentItem` identity is `(source_id, identity_key)` with
+`identity_key = external:<external_id>` else `url:<normalized url>`; an incoming item whose
+normalized URL the same source already stored is a replay first. Gematsu RSS rows use the
+WordPress GUID (`external_id = https://www.gematsu.com/?p=1081377`). The Popular Posts HTML
+carries only the slug URL, so the edited slug
+(`…network-test-version-appears-on-steamdb` vs `…network-test-appears-on-steamdb`) matched
+neither URL nor identity and became `url:`-keyed row `356691e4` → Event `37643076` (the RSS row
+is `6f374d65` → Event `d960de20`). The edited-slug article page (already fetched for its date)
+publishes the same stable ID three ways: `<link rel="alternate" type="application/json"
+href="…/wp-json/wp/v2/posts/1081377">`, body class `postid-1081377`, and the Disqus identifier
+`1081377 https://www.gematsu.com/?p=1081377`. A stable publisher identity exists. 3DM ranked
+rows use the article number; HN rows the story ID; Sina rows the URL (which embeds the doc ID;
+no edited Sina URL observed).
+
+D. Semantics. Stored: Sina `list_key news_click_day`, `ranking_kind click_count`, window
+`day:<top_time>` (the publisher's `top_type=day` list for a Beijing calendar date); Gematsu
+`popular_posts`/`popular`, no window; 3DM `recent_hot`/`hot`, no window; HN `top_stories`/`top`.
+No "24h", "rolling", or "today" claim exists in code, API, UI strings, or docs. Imprecision:
+the UI window label "daily list, 2026-09-30" / "日榜，2026-09-30" does not say the date is the
+publisher's Beijing calendar date.
+
+### Root causes (summary)
+
+- A: two independent `HackerNewsAdapter.fetch` calls for the same upstream list in one run.
+- B: none in the pipeline — the live ranked articles name nothing in the canonical catalog
+  (outcome **B**: pipeline already correct; no legitimate live Topics exist).
+- C: the ranked-list path had only the mutable slug URL, while the publisher's stable ID (the
+  WordPress post ID in the RSS GUID) was on the article page but never read.
+- D: no false claim; one imprecise label (the Beijing calendar date was not stated).
+
+### Changes
+
+- HN (A): `NewsRankingDefinition.reuse_ranking` (`hacker_news_top` → `hacker_news`);
+  `news_ranking_ingestion.reused_ranking_snapshot` reads this run's `hacker_news`
+  `IngestionBatch` (same batch key `update:<run-id>`) and its `RankObservation`s;
+  `HackerNewsTopContentAdapter.entries_from_observations` + `hn_story_id` build the ranked
+  articles (rank, points, story ID from `hn_url`, `time`) with no request. The snapshot records
+  `reused_ranking_batch_id` and shares the ranking's `observed_at`. Fallback: the adapter fetches
+  only when this run stored no `hacker_news` snapshot (manual `ingest-content`, a run without the
+  ranking, or a failed ranking fetch). No cache layer was added.
+- Identity (C): the article-page hook is now `article_details(url) -> ArticleDetails
+  (published_at, external_id)` (`lookup_articles` flag); `complete_article_details` looks up
+  new-URL entries lacking a date or an ID and never replaces values the row carries.
+  `parse_gematsu_article` takes the post ID from the page's own
+  `…/wp-json/wp/v2/posts/<id>` link, fails closed (no ID) when the body `postid-<id>` names a
+  different post or the link is missing or foreign, and returns it in the RSS GUID form
+  `https://www.gematsu.com/?p=<id>`. An edited-slug article then collides with the RSS row's
+  identity key `external:https://www.gematsu.com/?p=<id>` in `store_content_items` and resolves
+  to that row (never modified). 3DM's lookup adds only the date (the row already carries the
+  article number). No title, fuzzy, or AI matching; no historical row was merged.
+- Semantics (D): the window label is "daily list, Beijing date <date>" / "日榜，北京时间 <date>";
+  the Trending Methodology note states that each list keeps its publisher's name and time scope
+  and that lists stating no period are given none. Machine values unchanged (`day:<date>`,
+  `news_click_day`, `recent_hot`, `popular_posts`, `top_stories`).
+- Topics (B): no code change (none needed); regression tests added.
+
+### Files changed
+
+`backend/src/industry_intelligence/adapters/source/content_registry.py`,
+`backend/src/industry_intelligence/adapters/source/news_rankings.py`,
+`backend/src/industry_intelligence/services/news_ranking_ingestion.py`,
+`backend/tests/unit/test_news_rankings.py`, `backend/tests/integration/test_trending_postgres.py`,
+new `backend/tests/fixtures/gematsu_article_identity.html` (identity markers only, from the live
+page), `frontend/app/trending/page.tsx`, `frontend/lib/i18n.tsx`, plus `DEVELOPMENT.md`,
+`AGENTS.md`, `CLAUDE.md`, `README.md`.
+
+### Data model / migration
+
+No data-model change and no migration (head `20260930_12`). Snapshot `result` gains
+`reused_ranking_batch_id`; `publication_lookups` is now `article_lookups`
+(`lookups`, `dates_found`, `ids_found`); older snapshots keep their old key (read by nothing).
+
+### Tests
+
+- Unit (`test_news_rankings.py`, 19 → 24): Gematsu post ID in GUID form; fail-closed on
+  disagreeing, missing, or foreign markers; adapters' `article_details`; HN entries from stored
+  observations (no `time` → date unknown); list semantics are the publisher's own (no 24 h,
+  rolling, or today claim; only Sina states a period); lookups only for new entries missing a
+  date or ID, row values never replaced, crawl delay; adapters without article pages never
+  looked up.
+- Integration (`test_trending_postgres.py`, 9 → 13): HN requested once per run for both
+  consumers (counting `MockTransport`: 1 `topstories`, 1 request per story; ranking observations
+  still stored; article snapshot reuses the ranking batch; Trending shows both HN cards in HN
+  order); HN article list fetches itself only without a same-run snapshot; an edited URL
+  resolves to the feed row by the stable ID (one row, one Event, row unmodified) while a
+  similar-titled article with a different ID stays a separate row and Event; Topics come from
+  the existing linker (`exact_name` → EventSubjectLink → `topics[]`) and no Topic is invented
+  for an article naming no catalog Subject.
+- Results: pytest **785 passed, 1 skipped** (isolated test DB; 776 + 9); unit 585; the Trending
+  modules also pass against the dev-database configuration (37 passed, rolled back); Ruff check
+  and format check clean (177 files); ESLint passed; TypeScript passed; Next.js production build
+  passed (isolated scratchpad copy).
+
+### Live verification (2026-09-30)
+
+- Backup first: `native-industry_intelligence-20260930T042757Z-pre-trending-1.1.dump`
+  (35 table-data entries).
+- One lock-protected run: `intelligence-update --skip-ai --source hacker_news --source
+  hacker_news_top --source gematsu_popular` (run `20260930T042806Z-da804a5b`) → **SUCCESS,
+  exit 0**. Requests: 32 in total — HN `topstories` 1, HN items 30 (30 distinct), Gematsu list 1,
+  Gematsu article lookups 0. Before (Trending-1 design): HN 31 for the Subject ranking + 31 for
+  the article list = 62; now 31 for both. The `hacker_news_top` snapshot
+  (`ddf35273`) has `reused_ranking_batch_id = a1739d0c` (the `hacker_news` batch of the run) and
+  the same `observed_at` (04:28:06.93Z). Deltas: RankObservations +30, Subjects +6 (new HN story
+  Subjects, existing ranking behaviour), ContentItems +3, Events +3, composite runs +1 (computer),
+  content links +6 (all HN `same_article`), AI artifacts 0.
+- Topics: live Trending cards with Topics — computer 0/30, finance 0/20, gaming 0/12 (outcome
+  B, as audited).
+- URL identity: no live reproduction was available — all four Gematsu Popular Posts URLs were
+  already stored, so no lookup ran. The Trending-1 duplicate (`356691e4`/Event `37643076` vs
+  RSS `6f374d65`/Event `d960de20`, same post 1081377) is unchanged: its edited URL is now a
+  stored URL and matches that row first. The fix prevents new cases (fixture/integration
+  tests); it does not repair the existing one.
+- Labels (browser, isolated build on 3060 / API 8060): English "新浪财经 · 热门新闻排行 · 新闻榜 ·
+  点击量排行 (daily list, Beijing date 2026-09-30)", Chinese "(日榜，北京时间 2026-09-30)";
+  Gematsu "Popular Posts" and 3DM "近期热门" with no period; no "24h/rolling/today" text in
+  either locale; fresh tab: 12 Gaming cards, no overflow, console errors 0.
+- After: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health` 29/29 healthy.
+
+### Known limitations
+
+- The existing Gematsu duplicate (post 1081377) remains two ContentItems and two Events; a
+  reviewed `event-merge d960de20… 37643076… --reason "same Gematsu post 1081377"` would show one
+  card (owner decision; not run).
+- The stable-ID lookup runs only for list URLs not stored yet; a URL already stored under a
+  duplicate row keeps mapping to that row.
+- If this run's HN Subject ranking fails, the article list fetches Top Stories itself (a second
+  attempt only after the first produced no snapshot).
+- The HN article list inherits the ranking path's row filter (a story resolving to a Subject
+  already seen in the snapshot is skipped there); not observed live.
+- Sina identity stays URL-based (the URL embeds the doc ID; no edited Sina URL observed).
+- Live Topics stay empty until the catalog holds Subjects the listed articles name.
+
+### Next step
+
+Owner decisions: the reviewed Event merge for the Gematsu duplicate; catalog coverage for
+Topics; Computer ranked lists (IT之家 日榜 / 虎嗅) remain deferred.

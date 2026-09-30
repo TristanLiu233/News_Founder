@@ -5,26 +5,45 @@ posts, hot, top stories) and returns ``RankedContentItem``s whose ``rank`` is th
 position in that list — never a chronological index. Nothing is scored, merged, or re-ordered
 here; the list's window and basis are recorded only when the publisher states them.
 
-An adapter may also define ``published_at(url)``: the publication time from the article page,
-used by the ingestion service only for listed articles that are not stored yet and whose list
-row has no date (``lookup_delay`` seconds apart). A failed lookup leaves the time unknown.
+An adapter with ``lookup_articles`` also defines ``article_details(url)``: the publication time
+and the publisher's stable article ID read from the article page. The ingestion service calls
+it only for listed articles whose URL is not stored yet and whose row lacks a date or an ID
+(``lookup_delay`` seconds apart); a failed lookup leaves both unknown. The stable ID lets an
+article whose URL the publisher edited resolve to the row its feed stored under that ID.
+
+An adapter may also build its entries from a Subject-ranking snapshot this run already stored
+(``entries_from_observations``), so the same upstream list is not requested twice.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
-from industry_intelligence.adapters.source.base import ContentSourceItem, RankedContentItem
+from industry_intelligence.adapters.source.base import (
+    ContentSourceItem,
+    RankedContentItem,
+    SourceItem,
+)
 from industry_intelligence.adapters.source.finance_news import _clean, _time
 from industry_intelligence.adapters.source.hacker_news import HackerNewsAdapter
 from industry_intelligence.domain.enums import Domain
 
 BEIJING = ZoneInfo("Asia/Shanghai")
+
+
+@dataclass(frozen=True, slots=True)
+class ArticleDetails:
+    """What an article page states: publication time and the publisher's stable article ID."""
+
+    published_at: datetime | None = None
+    external_id: str | None = None
 
 
 class NewsRankingAdapter:
@@ -34,12 +53,13 @@ class NewsRankingAdapter:
     domain: Domain
     language = "en"
     lookup_delay = 0.0
+    lookup_articles = False
 
     def __init__(self, http, limit=30):
         self.http, self.limit, self.failed_count = http, limit, 0
         self.window: str | None = None
 
-    async def published_at(self, url) -> datetime | None:
+    async def article_details(self, url) -> ArticleDetails | None:
         return None
 
 
@@ -162,6 +182,32 @@ def parse_gematsu_popular(html, observed_at):
 PUBLISHED_META = re.compile(
     r'<meta[^>]+property="article:published_time"[^>]+content="([^"]+)"', re.I
 )
+# WordPress declares the post's REST resource, whose number is the post ID of the feed GUID.
+WP_REST_POST = re.compile(
+    r'<link[^>]+type="application/json"[^>]+href="'
+    r'https://www\.gematsu\.com/wp-json/wp/v2/posts/(\d+)"',
+    re.I,
+)
+WP_BODY_POST = re.compile(r'<body[^>]+class="[^"]*\bpostid-(\d+)\b', re.I)
+GEMATSU_GUID = "https://www.gematsu.com/?p={}"
+
+
+def parse_gematsu_article(html):
+    """Publication time and the WordPress post ID in the RSS GUID form (``…/?p=<id>``).
+
+    The ID comes from the page's REST link; when the body class names a different post, the ID
+    is left unknown (fail closed) rather than guessed.
+    """
+
+    published = PUBLISHED_META.search(html)
+    rest, body = WP_REST_POST.search(html), WP_BODY_POST.search(html)
+    post_id = rest.group(1) if rest else None
+    if post_id and body and body.group(1) != post_id:
+        post_id = None
+    return ArticleDetails(
+        _time(published.group(1)) if published else None,
+        GEMATSU_GUID.format(post_id) if post_id else None,
+    )
 
 
 class GematsuPopularAdapter(NewsRankingAdapter):
@@ -170,6 +216,7 @@ class GematsuPopularAdapter(NewsRankingAdapter):
     page_url = "https://www.gematsu.com/"
     # robots.txt: Crawl-delay 10.
     lookup_delay = 10.0
+    lookup_articles = True
 
     async def fetch(self):
         observed_at = datetime.now(UTC)
@@ -177,9 +224,8 @@ class GematsuPopularAdapter(NewsRankingAdapter):
         entries, self.failed_count = parse_gematsu_popular(response.text, observed_at)
         return entries[: self.limit]
 
-    async def published_at(self, url):
-        match = PUBLISHED_META.search((await self.http.get(url)).text)
-        return _time(match.group(1)) if match else None
+    async def article_details(self, url):
+        return parse_gematsu_article((await self.http.get(url)).text)
 
 
 # --- 3DM 近期热门 --------------------------------------------------------------------------------
@@ -236,6 +282,7 @@ class Game3DMHotAdapter(NewsRankingAdapter):
     language = "zh-CN"
     page_url = "https://www.3dmgame.com/news/"
     lookup_delay = 1.0
+    lookup_articles = True
 
     async def fetch(self):
         observed_at = datetime.now(UTC)
@@ -243,8 +290,9 @@ class Game3DMHotAdapter(NewsRankingAdapter):
         entries, self.failed_count = parse_3dm_hot(response.text, observed_at)
         return entries[: self.limit]
 
-    async def published_at(self, url):
-        return parse_3dm_published((await self.http.get(url)).text)
+    async def article_details(self, url):
+        # The article number is already the list row's external ID.
+        return ArticleDetails(parse_3dm_published((await self.http.get(url)).text))
 
 
 # --- Hacker News Top Stories --------------------------------------------------------------------
@@ -279,11 +327,40 @@ def hn_ranked_entries(items):
     return entries
 
 
+def hn_story_id(hn_url):
+    """The story ID of ``https://news.ycombinator.com/item?id=<id>``, else None."""
+
+    values = parse_qs(urlsplit(hn_url or "").query).get("id", [])
+    return values[0] if len(values) == 1 and values[0].isdigit() else None
+
+
 class HackerNewsTopContentAdapter(NewsRankingAdapter):
-    """The official Firebase ``topstories`` list, read through the existing Top Stories adapter."""
+    """The official Firebase ``topstories`` list, read through the existing Top Stories adapter.
+
+    In a daily run the Subject ranking (``hacker_news``) has already stored this run's Top
+    Stories snapshot; ``entries_from_observations`` builds the ranked articles from it, so the
+    list and its items are requested once per run. ``fetch`` is the fallback when no snapshot of
+    this run exists (manual ingestion, or the ranking was not run or stored nothing).
+    """
 
     source_name = "Hacker News"
     domain = Domain.COMPUTER
+
+    @staticmethod
+    def entries_from_observations(observations):
+        return hn_ranked_entries(
+            SourceItem(
+                hn_story_id((row.item_metadata or {}).get("hn_url")),
+                row.title,
+                row.url,
+                row.rank,
+                row.raw_metric,
+                row.observed_at,
+                row.item_metadata or {},
+            )
+            for row in observations
+            if row.title and row.url
+        )
 
     async def fetch(self):
         adapter = HackerNewsAdapter(self.http, self.limit)

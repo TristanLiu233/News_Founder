@@ -3,9 +3,14 @@
 One run of a ``NEWS_RANKINGS`` definition:
 
 1. fetch the list (outside any transaction) — entries keep the publisher's own rank;
-2. for listed articles that are not stored yet and whose row carries no date, read the
-   publication time from the article page (``adapter.published_at``), serially and bounded by
-   the list length; a failed lookup leaves the time unknown and never fails the source;
+   — or, for a list that a Subject ranking of the same run already stored
+   (``reuse_ranking``, e.g. Hacker News Top Stories), build the entries from that stored
+   snapshot with no request at all;
+2. for listed articles whose URL is not stored yet and whose row lacks a date or the
+   publisher's stable article ID, read both from the article page (``adapter.article_details``),
+   serially and bounded by the list length; a failed lookup leaves them unknown and never fails
+   the source. A stable ID equal to one the publisher's feed already stored (e.g. the Gematsu
+   WordPress GUID) resolves an edited URL to that existing row instead of a duplicate;
 3. in one transaction: store the articles as ordinary ``ContentItem``s of the publisher's
    ``Source`` (an article already stored from its chronological feed is the same row and is
    never modified), link new rows deterministically, and append one ``IngestionBatch``
@@ -31,7 +36,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from industry_intelligence.adapters.source.content_registry import NEWS_RANKINGS
-from industry_intelligence.db.models import ContentItem, RankList, Source
+from industry_intelligence.db.models import ContentItem, RankList, RankObservation, Source
 from industry_intelligence.db.models.ingestion_batch import IngestionBatch
 from industry_intelligence.infrastructure.http import HTTPClient
 from industry_intelligence.services.content_ingestion import (
@@ -89,36 +94,71 @@ def stored_urls(session, definition, urls):
     )
 
 
-def _with_published(entry, published_at):
-    return replace(entry, item=replace(entry.item, published_at=published_at))
+def reused_ranking_snapshot(session, definition, batch_key):
+    """(batch, entries) from the Subject-ranking snapshot this run stored for the same upstream
+    list, or None when the definition reuses none or this run stored no such snapshot."""
+
+    if not definition.reuse_ranking:
+        return None
+    batch = session.scalar(
+        select(IngestionBatch).filter_by(source_key=definition.reuse_ranking, batch_key=batch_key)
+    )
+    if batch is None:
+        return None
+    observations = session.scalars(
+        select(RankObservation)
+        .where(
+            RankObservation.rank_list_id == batch.rank_list_id,
+            RankObservation.observed_at == batch.observed_at,
+        )
+        .order_by(RankObservation.rank)
+    ).all()
+    return batch, definition.adapter.entries_from_observations(observations)
 
 
-async def complete_publication_times(adapter, entries, known_urls, sleep=asyncio.sleep):
-    """Publication times for new, undated entries only: serial requests, each preceded by
-    ``adapter.lookup_delay`` seconds (the publisher's crawl delay after the list request)."""
+def _needs_lookup(adapter, entry, known_urls):
+    if not adapter.lookup_articles or normalize_url(entry.item.url) in known_urls:
+        return False
+    return entry.item.published_at is None or entry.item.external_id is None
 
-    completed, lookups, found = [], 0, 0
+
+async def complete_article_details(adapter, entries, known_urls, sleep=asyncio.sleep):
+    """Publication time and stable article ID for new entries that lack either: serial
+    requests, each preceded by ``adapter.lookup_delay`` seconds (the publisher's crawl delay).
+    Values the list row already carries are never replaced."""
+
+    completed, counts = [], {"lookups": 0, "dates_found": 0, "ids_found": 0}
     for entry in entries:
-        url = normalize_url(entry.item.url)
-        if entry.item.published_at is not None or url in known_urls:
+        if not _needs_lookup(adapter, entry, known_urls):
             completed.append(entry)
             continue
         if adapter.lookup_delay:
             await sleep(adapter.lookup_delay)
-        lookups += 1
+        counts["lookups"] += 1
         try:
-            published = await adapter.published_at(entry.item.url)
-        except Exception:  # an article page failure leaves the time unknown
-            published = None
-        if published is not None:
-            found += 1
-            entry = _with_published(entry, published)
-        completed.append(entry)
-    return completed, {"lookups": lookups, "found": found}
+            details = await adapter.article_details(entry.item.url)
+        except Exception:  # an article page failure leaves both unknown
+            details = None
+        item = entry.item
+        if details is not None and item.published_at is None and details.published_at:
+            counts["dates_found"] += 1
+            item = replace(item, published_at=details.published_at)
+        if details is not None and item.external_id is None and details.external_id:
+            counts["ids_found"] += 1
+            item = replace(item, external_id=details.external_id)
+        completed.append(replace(entry, item=item))
+    return completed, counts
 
 
 def persist_news_ranking(
-    session, definition, entries, batch_key, window=None, failed_count=0, lookups=None
+    session,
+    definition,
+    entries,
+    batch_key,
+    window=None,
+    failed_count=0,
+    lookups=None,
+    reused_batch_id=None,
 ):
     """Store the listed articles and append one snapshot; the caller owns the transaction."""
 
@@ -182,7 +222,8 @@ def persist_news_ranking(
             "ranking_kind": definition.ranking_kind,
             "window": window,
             "entries": ranked,
-            "publication_lookups": lookups or {"lookups": 0, "found": 0},
+            "article_lookups": lookups or {"lookups": 0, "dates_found": 0, "ids_found": 0},
+            "reused_ranking_batch_id": reused_batch_id,
             **counts,
         },
     )
@@ -198,6 +239,7 @@ def persist_news_ranking(
         "batch_id": str(batch.id),
         "observed_at": observed_at.isoformat(),
         "window": window,
+        "reused_ranking_batch_id": reused_batch_id,
         **counts,
         "skipped_count": stored["replayed"] + stored["invalid"],
         "linked_subject_count": link_result["linked_subjects"],
@@ -215,6 +257,14 @@ async def ingest_news_ranking(key, settings, session_factory, batch_key=None):
         batch = existing_batch(session, definition, batch_key)
         if batch is not None:
             return _replay_result(definition, batch)
+        reused = reused_ranking_snapshot(session, definition, batch_key)
+    if reused is not None:
+        # Same upstream list already stored by this run's Subject ranking: no request at all.
+        ranking_batch, entries = reused
+        with ingestion_phase(PERSIST), session_factory.begin() as session:
+            return persist_news_ranking(
+                session, definition, entries, batch_key, reused_batch_id=str(ranking_batch.id)
+            )
     with ingestion_phase(FETCH):
         async with HTTPClient(settings) as http:
             adapter = definition.adapter(http, settings.source_fetch_limit)
@@ -223,7 +273,7 @@ async def ingest_news_ranking(key, settings, session_factory, batch_key=None):
                 known = stored_urls(
                     session, definition, {normalize_url(entry.item.url) for entry in entries}
                 )
-            entries, lookups = await complete_publication_times(adapter, entries, known)
+            entries, lookups = await complete_article_details(adapter, entries, known)
     with ingestion_phase(PERSIST), session_factory.begin() as session:
         return persist_news_ranking(
             session, definition, entries, batch_key, adapter.window, adapter.failed_count, lookups

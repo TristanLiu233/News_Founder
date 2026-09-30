@@ -165,6 +165,9 @@ class NewsRankingDefinition:
     acquisition: str
     primary_language: str
     content_type: ContentType = ContentType.NEWS
+    # A Subject ranking (``SOURCES`` key) that stores this same upstream list in the same run;
+    # its snapshot is reused so the list is requested once per run.
+    reuse_ranking: str | None = None
 
 
 NEWS_RANKINGS = {
@@ -217,6 +220,7 @@ NEWS_RANKINGS = {
             HackerNewsTopContentAdapter,
             "API",
             "en",
+            reuse_ranking="hacker_news",
         ),
     )
 }

@@ -1063,6 +1063,13 @@ publisher ranked list → ContentItem (same Source as the publisher's feed)
   popularity judgement.
 - Game, coin, stock, and repository charts rank entities, not news; they stay on Today and
   Subject Detail and never make an Event "trending".
+- Hacker News Top Stories is requested once per run: the article list is built from the
+  Subject ranking's snapshot of the same run (Trending-1.1).
+- An article whose URL the publisher edited resolves to the stored row through the publisher's
+  stable ID (for Gematsu, the WordPress post ID read from the article page, as in its RSS GUID);
+  without a stable ID nothing is merged.
+- Sina's list is the publisher's daily list for a Beijing calendar date, not a rolling 24 h
+  window; Popular Posts and 近期热门 state no period and are given none.
 - The lists run in the daily `intelligence-update` content stage; one list by hand:
   `python -m industry_intelligence.cli ingest-content gematsu_popular`.
 

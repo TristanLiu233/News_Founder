@@ -45,7 +45,8 @@ export const common = {
     publisherRanks: "Publisher rankings",
     rankWord: "rank",
     relatedTopics: "Related topics",
-    dailyList: (date: string) => `daily list, ${date}`,
+    /** The publisher's own daily list (e.g. Sina `top_type=day`) for a Beijing calendar date; never a rolling 24 h window. */
+    dailyList: (date: string) => `daily list, Beijing date ${date}`,
     companyTag: "Company",
   },
   "zh-CN": {
@@ -83,7 +84,7 @@ export const common = {
     publisherRanks: "发布方榜单排名",
     rankWord: "排名",
     relatedTopics: "相关主题",
-    dailyList: (date: string) => `日榜，${date}`,
+    dailyList: (date: string) => `日榜，北京时间 ${date}`,
     companyTag: "公司",
   },
 } as const;

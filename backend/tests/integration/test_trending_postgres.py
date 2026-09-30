@@ -10,6 +10,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
@@ -20,7 +21,10 @@ from industry_intelligence.adapters.source.content_registry import (
     ContentSourceDefinition,
     NewsRankingDefinition,
 )
-from industry_intelligence.adapters.source.news_rankings import NewsRankingAdapter
+from industry_intelligence.adapters.source.news_rankings import (
+    ArticleDetails,
+    NewsRankingAdapter,
+)
 from industry_intelligence.config import get_settings
 from industry_intelligence.db.models import (
     ContentItem,
@@ -33,9 +37,11 @@ from industry_intelligence.db.models import (
 from industry_intelligence.db.models.ingestion_batch import IngestionBatch
 from industry_intelligence.db.session import get_db_session
 from industry_intelligence.domain.enums import ContentType, Domain, SubjectType
+from industry_intelligence.infrastructure.http import HTTPClient
 from industry_intelligence.main import create_app
 from industry_intelligence.services import intelligence_update as update
 from industry_intelligence.services import news_ranking_ingestion as ranking_ingestion
+from industry_intelligence.services import source_ingestion
 from industry_intelligence.services import trending as trending_service
 from industry_intelligence.services.content_ingestion import persist_content
 from industry_intelligence.services.event_ingestion import build_events
@@ -72,13 +78,14 @@ class StaticRanking(NewsRankingAdapter):
 
     source_name = ""
     lookup_delay = 0.0
+    lookup_articles = True
 
     async def fetch(self):
         FETCHES.append(self.source_name)
         self.window = "day:2033-06-01"
         return PAYLOAD[self.source_name]
 
-    async def published_at(self, url):
+    async def article_details(self, url):
         return LOOKUPS.get(url)
 
 
@@ -443,8 +450,8 @@ def test_ingest_looks_up_times_only_for_new_undated_articles_and_replays_runs(
         db, registry["feed"], [item(known, "Known feed story", T0 - timedelta(hours=5))]
     )
     new = "https://popular.example.test/new"
-    LOOKUPS[new] = T0 - timedelta(hours=2)
-    LOOKUPS[known] = T0 + timedelta(days=9)  # must never be used
+    LOOKUPS[new] = ArticleDetails(T0 - timedelta(hours=2))
+    LOOKUPS[known] = ArticleDetails(T0 + timedelta(days=9))  # must never be used
     PAYLOAD[popular.name] = [
         ranked(1, new, "Brand new popular post", published=None),
         ranked(2, known, "Known feed story", published=None),
@@ -452,7 +459,7 @@ def test_ingest_looks_up_times_only_for_new_undated_articles_and_replays_runs(
     result = asyncio.run(ingest_news_ranking("t_popular", settings, factory, "update:r1"))
     assert result["replayed"] is False and result["window"] == "day:2033-06-01"
     batch = db.scalar(select(IngestionBatch).filter_by(source_key="t_popular"))
-    assert batch.result["publication_lookups"] == {"lookups": 1, "found": 1}
+    assert batch.result["article_lookups"] == {"lookups": 1, "dates_found": 1, "ids_found": 0}
     assert db.scalar(
         select(ContentItem.published_at).where(ContentItem.url == new)
     ) == T0 - timedelta(hours=2)
@@ -485,3 +492,199 @@ def test_content_stage_records_a_snapshot_per_run(db, factory, registry, setting
     assert attempts[0][2]["replayed"] is False and attempts[1][2]["replayed"] is True
     batch = db.scalar(select(IngestionBatch).filter_by(source_key="t_popular"))
     assert batch.batch_key == "update:R1"
+
+
+# --- Trending-1.1 hardening ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def hn_http(monkeypatch):
+    """Hacker News through the real ``HTTPClient`` and a counting ``MockTransport``."""
+
+    tag = uuid4().hex[:8]
+    stories = {
+        990000001: f"Synthetic HN story alpha {tag}",
+        990000002: f"Synthetic HN story bravo {tag}",
+    }
+    requests = []
+
+    def handler(request):
+        requests.append(request.url.path)
+        if request.url.path.endswith("/topstories.json"):
+            return httpx.Response(200, json=list(stories))
+        story = int(request.url.path.rsplit("/", 1)[1].split(".")[0])
+        return httpx.Response(
+            200,
+            json={
+                "id": story,
+                "title": stories[story],
+                "url": f"https://hn-test.example.test/{tag}/{story}",
+                "score": 100 + story % 10,
+                "by": "tester",
+                "descendants": 3,
+                "time": int(T0.timestamp()),
+            },
+        )
+
+    def client(settings, **kwargs):
+        return HTTPClient(settings, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(source_ingestion, "HTTPClient", client)
+    monkeypatch.setattr(ranking_ingestion, "HTTPClient", client)
+    return {"requests": requests, "stories": stories}
+
+
+def test_hn_top_stories_are_requested_once_per_run_for_both_consumers(
+    db, factory, settings, hn_http
+):
+    ranking = asyncio.run(update.ranking_stage(settings, factory, ["hacker_news"], "HN1"))
+    content = asyncio.run(
+        update.content_stage(settings, factory, ["hacker_news_top"], run_id="HN1")
+    )
+    assert ranking.status == "success" and content.status == "success"
+    requests = hn_http["requests"]
+    # One list request and one request per story for the whole run.
+    assert sum(path.endswith("/topstories.json") for path in requests) == 1
+    assert sorted(path.rsplit("/", 1)[1] for path in requests if "/item/" in path) == [
+        "990000001.json",
+        "990000002.json",
+    ]
+    ranking_batch = db.scalar(
+        select(IngestionBatch).filter_by(source_key="hacker_news", batch_key="update:HN1")
+    )
+    news_batch = db.scalar(
+        select(IngestionBatch).filter_by(source_key="hacker_news_top", batch_key="update:HN1")
+    )
+    # The Subject ranking still stores its observations; the article list reuses them exactly.
+    assert (
+        db.scalar(
+            select(func.count())
+            .select_from(RankObservation)
+            .where(
+                RankObservation.rank_list_id == ranking_batch.rank_list_id,
+                RankObservation.observed_at == ranking_batch.observed_at,
+            )
+        )
+        == 2
+    )
+    assert news_batch.result["reused_ranking_batch_id"] == str(ranking_batch.id)
+    assert news_batch.observed_at == ranking_batch.observed_at
+    assert [e["rank"] for e in news_batch.result["entries"]] == [1, 2]
+    items = {
+        row.external_id: row
+        for row in db.scalars(
+            select(ContentItem).where(ContentItem.external_id.in_(["990000001", "990000002"]))
+        )
+    }
+    assert items["990000001"].published_at == T0
+    assert items["990000001"].title == hn_http["stories"][990000001]
+    build_events(db, content_ids=[row.id for row in items.values()])
+    computer = trending(db, "computer")["domains"][0]
+    shown = [
+        (card["event"]["canonical_title"], card["external_rankings"][0]["rank"])
+        for card in computer["items"][:2]
+    ]
+    assert shown == [
+        (hn_http["stories"][990000001], 1),
+        (hn_http["stories"][990000002], 2),
+    ]
+
+
+def test_hn_article_list_fetches_itself_only_without_a_same_run_snapshot(
+    db, factory, settings, hn_http
+):
+    stage = asyncio.run(update.content_stage(settings, factory, ["hacker_news_top"], run_id="HN2"))
+    assert stage.status == "success"
+    assert sum(path.endswith("/topstories.json") for path in hn_http["requests"]) == 1
+    batch = db.scalar(
+        select(IngestionBatch).filter_by(source_key="hacker_news_top", batch_key="update:HN2")
+    )
+    assert batch.result["reused_ranking_batch_id"] is None
+    assert len(batch.result["entries"]) == 2
+
+
+def test_edited_url_resolves_to_the_feed_row_by_the_publishers_stable_id(
+    db, factory, registry, settings
+):
+    popular = registry["lists"]["t_popular"]
+    old = "https://popular.example.test/2033/06/harbor-lights-sequel-announced"
+    edited = "https://popular.example.test/2033/06/harbor-lights-sequel-officially-announced"
+    other = "https://popular.example.test/2033/06/harbor-lights-sequel-announced-for-2035"
+    feed_row = ContentSourceItem(
+        "https://popular.example.test/?p=77",
+        "Harbor Lights sequel announced",
+        old,
+        T0 - timedelta(hours=3),
+        T0 - timedelta(hours=3),
+        "en",
+    )
+    persist_content(db, registry["feed"], [feed_row])
+    stored = db.scalar(select(ContentItem).where(ContentItem.url == old))
+    before = (stored.url, stored.title, stored.updated_at)
+    LOOKUPS[edited] = ArticleDetails(T0 - timedelta(hours=3), "https://popular.example.test/?p=77")
+    # Similar title, different stable ID: a different article that must stay separate.
+    LOOKUPS[other] = ArticleDetails(T0 - timedelta(hours=2), "https://popular.example.test/?p=78")
+    PAYLOAD[popular.name] = [
+        ranked(1, edited, "Harbor Lights sequel officially announced", published=None),
+        ranked(2, other, "Harbor Lights sequel announced for 2035", published=None),
+    ]
+    result = asyncio.run(ingest_news_ranking("t_popular", settings, factory, "update:id1"))
+    assert (result["persisted_count"], result["replayed_count"]) == (1, 1)
+    batch = db.scalar(select(IngestionBatch).filter_by(source_key="t_popular"))
+    assert batch.result["article_lookups"] == {"lookups": 2, "dates_found": 2, "ids_found": 2}
+    first, second = batch.result["entries"]
+    assert first["content_item_id"] == str(stored.id)
+    assert db.scalar(select(ContentItem.url).where(ContentItem.url == edited)) is None
+    db.refresh(stored)
+    assert (stored.url, stored.title, stored.updated_at) == before
+    separate = db.scalar(select(ContentItem).where(ContentItem.url == other))
+    assert second["content_item_id"] == str(separate.id)
+    assert separate.external_id == "https://popular.example.test/?p=78"
+    build_events(db, content_ids=[stored.id, separate.id])
+    assert _event_of(db, stored.id) != _event_of(db, separate.id)
+    gaming = trending(db, "gaming")["domains"][0]
+    assert [card["event"]["id"] for card in gaming["items"]] == [
+        str(_event_of(db, stored.id)),
+        str(_event_of(db, separate.id)),
+    ]
+
+
+def test_topics_come_from_the_existing_linker_and_are_never_invented(db, registry):
+    popular = registry["lists"]["t_popular"]
+    game = Subject(
+        domain=Domain.GAMING,
+        subject_type=SubjectType.GAME,
+        title=f"Quasar Drift {registry['tag']}",
+        canonical_name=f"quasar drift {registry['tag']}",
+    )
+    db.add(game)
+    db.flush()
+    named = "https://popular.example.test/quasar-drift-date"
+    unnamed = "https://popular.example.test/unannounced-project"
+    result = persist_news_ranking(
+        db,
+        popular,
+        [
+            ranked(1, named, f"Quasar Drift {registry['tag']} gets a March release date"),
+            ranked(2, unnamed, "Studio teases an unannounced Quasar project"),
+        ],
+        "run:topics",
+    )
+    assert result["link_count"] == 1
+    ids = {url: content_id(db, url) for url in (named, unnamed)}
+    link = db.scalar(
+        select(ContentSubjectLink).where(ContentSubjectLink.content_item_id == ids[named])
+    )
+    assert (link.subject_id, link.strategy) == (game.id, "exact_name")
+    assert (
+        db.scalar(
+            select(func.count())
+            .select_from(ContentSubjectLink)
+            .where(ContentSubjectLink.content_item_id == ids[unnamed])
+        )
+        == 0
+    )
+    build_events(db, content_ids=list(ids.values()))
+    cards = trending(db, "gaming")["domains"][0]["items"]
+    assert [[t["id"] for t in card["topics"]] for card in cards] == [[str(game.id)], []]
+    assert cards[0]["topics"][0]["strategy"] == "content_subject_link"
