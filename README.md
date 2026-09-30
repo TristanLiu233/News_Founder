@@ -885,3 +885,37 @@ and the Deployment-2 scope: [docs/deployment.md](docs/deployment.md).
 - Backend production start: `uvicorn industry_intelligence.main:app --host 127.0.0.1 --port 8000 --workers 2`
   from `backend/` (no `--reload`).
 - Backups: `pg_dump -Fc` (1.4 MB today); restore with `pg_restore` from a file (not a pipe).
+
+## Deployment-2A — Production packaging (templates, nothing deployed)
+
+Status (2026-09-30): production images, compose stack, reverse proxy, systemd timers, backups,
+freshness check, failure-notification hook, and restore/cut-over runbooks are in the repository and
+verified on an isolated local production-style stack. **No server is provisioned**; the Mac's
+launchd agent stays the daily update until the supervised cut-over ([docs/cutover.md](docs/cutover.md)).
+
+| Path | What |
+| --- | --- |
+| `backend/Dockerfile` | one image for the API (uvicorn, 2 workers, no reload) and every CLI job; non-root |
+| `frontend/Dockerfile` | Node 24, `npm ci` → `npm run build` (build arg `NEXT_PUBLIC_API_BASE_URL=https://<domain>`) → `npm start`; non-root |
+| `deploy/docker-compose.production.yml` | postgres (pgvector:pg16, private, no published port), backend, frontend, caddy (only 80/443) |
+| `deploy/Caddyfile` | `https://{$APP_DOMAIN}`: `/api/*`, `/health`, `/health/db` → backend; rest → frontend |
+| `deploy/production.env.example` | placeholders; the real file lives only on the server (`/etc/industry-intelligence/production.env`, root 600) |
+| `deploy/bin/ii-compose` | `docker compose` with the production env file and project name |
+| `deploy/bin/backup.sh` | `pg_dump -Fc`, 14 daily + 6 monthly, off-host hook |
+| `deploy/bin/notify-failure.sh`, `deploy/hooks/*.example` | `OnFailure=` notification through an owner-installed hook |
+| `deploy/systemd/` | update 10:00, backup 11:00, freshness 12:30 (`Australia/Sydney`), notify template |
+
+```bash
+# On the server (root), from the checkout at /opt/industry-intelligence
+deploy/bin/ii-compose build
+deploy/bin/ii-compose up -d --wait postgres
+deploy/bin/ii-compose run --rm -T backend alembic upgrade head      # explicit; never on start
+deploy/bin/ii-compose up -d --wait
+deploy/bin/ii-compose run --rm -T backend python -m industry_intelligence.cli intelligence-update --plan --skip-ai
+
+# Read-only freshness check used by the 12:30 timer (also works locally from backend/):
+# exit 0 when a successful intelligence-update started within the last 26 hours, else 1
+python -m industry_intelligence.cli update-freshness [--max-age-hours 26] [--json]
+```
+
+Details: [docs/deployment.md](docs/deployment.md) §8–10, restores: [docs/restore.md](docs/restore.md).
