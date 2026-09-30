@@ -66,10 +66,15 @@ Composite Ranking measures cross-platform attention based on rankings already pr
 
 ## Setup and commands
 
+The local database is native PostgreSQL 16 with pgvector and pg_trgm on `127.0.0.1:5433`, kept
+running by a launchd service; Docker Desktop is not needed for local operation. Install it once as
+described in [Local runtime](#local-1--local-runtime-native-postgresql-16) and set `DATABASE_URL`
+in `.env`. `docker compose up -d` (`docker-compose.yml`, `127.0.0.1:5432`) remains an optional
+alternative local database.
+
 ```bash
 cp .env.example .env
 cp frontend/.env.example frontend/.env.local
-docker compose up -d
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -868,6 +873,118 @@ Exit codes in the log and in `launchctl print` are the command's: `0` success, `
 earlier stages may have committed; investigate before the next run), `4` already running
 (another update held the lock; nothing was done), `78` refused by the wrapper (system time zone).
 Running the wrapper by hand (without `--plan`) performs a real update.
+
+## Local-1 — Local runtime (native PostgreSQL 16)
+
+Status (2026-09-30): the local database runs natively; **daily local operation does not require
+Docker Desktop**. The launchd update (10:00 Australia/Sydney, `--skip-ai`) reads `DATABASE_URL`
+from the root `.env` and was verified with Docker fully quit. Production packaging is unchanged:
+Docker Compose stays the planned production mechanism (Deployment-2A), so local and production
+database runtimes are intentionally different.
+
+| Item | Local runtime |
+| --- | --- |
+| Server | PostgreSQL 16.15 (conda-forge `postgresql=16.15` in the conda env `ii-pg16`, binaries in `/opt/anaconda3/envs/ii-pg16/bin`) |
+| Extensions | `vector` 0.8.6 (pgvector built from the official `v0.8.6` tag against that server; conda-forge's PG16-compatible builds stop at 0.7.4) and `pg_trgm` 1.6 |
+| Data directory | `~/Library/Application Support/industry-intelligence/postgresql16` (outside the repository) |
+| Service | launchd agent `local.industry-intelligence.postgresql` (`ops/postgres/…plist.template`; `RunAtLoad`, `KeepAlive`), starts at login |
+| Listening | `127.0.0.1:5433`, `[::1]:5433`, Unix socket `/tmp/.s.PGSQL.5433` (`ops/postgres/postgresql.local.conf`); never a LAN or public address |
+| Roles | the macOS user is the superuser (peer auth over the socket only); the application role `industry` (not superuser, password in `.env` only) owns `industry_intelligence` and `industry_intelligence_test` |
+| Log | `~/Library/Logs/industry-intelligence/postgresql.log` |
+| Server settings | `timezone = 'Etc/UTC'` (as in the Docker image), UTF-8, locale `en_US.UTF-8` |
+
+Homebrew is not installed on this Mac (installing it needs an administrator password), so the
+server comes from conda-forge in its own environment; nothing else in Anaconda is touched.
+
+```bash
+PGBIN=/opt/anaconda3/envs/ii-pg16/bin
+PGDATA="$HOME/Library/Application Support/industry-intelligence/postgresql16"
+LOG="$HOME/Library/Logs/industry-intelligence"
+
+# Install (once)
+conda create -y --override-channels -c conda-forge -n ii-pg16 postgresql=16.15
+git clone --depth 1 --branch v0.8.6 https://github.com/pgvector/pgvector.git && cd pgvector
+make PG_CONFIG=$PGBIN/pg_config CC=clang LDFLAGS="-Wl,-rpath,${PGBIN%/bin}/lib -L${PGBIN%/bin}/lib"
+make install PG_CONFIG=$PGBIN/pg_config CC=clang LDFLAGS="-Wl,-rpath,${PGBIN%/bin}/lib -L${PGBIN%/bin}/lib"
+cd -
+mkdir -p "$(dirname "$PGDATA")" "$LOG"
+$PGBIN/initdb -D "$PGDATA" -E UTF8 --locale=en_US.UTF-8 --auth-local=peer --auth-host=scram-sha-256
+cat ops/postgres/postgresql.local.conf >> "$PGDATA/postgresql.conf"
+sed -e "s|__PG_BIN__|$PGBIN|g" -e "s|__PGDATA__|$PGDATA|g" -e "s|__LOG_DIR__|$LOG|g" \
+  ops/postgres/local.industry-intelligence.postgresql.plist.template \
+  > ~/Library/LaunchAgents/local.industry-intelligence.postgresql.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.industry-intelligence.postgresql.plist
+# Role and databases (psql prompts for nothing: peer auth as the macOS user)
+$PGBIN/psql -h /tmp -p 5433 -d postgres -c "CREATE ROLE industry LOGIN PASSWORD '<choose one>'"
+$PGBIN/createdb -h /tmp -p 5433 -O industry industry_intelligence
+$PGBIN/createdb -h /tmp -p 5433 -O industry industry_intelligence_test
+for db in industry_intelligence industry_intelligence_test; do
+  $PGBIN/psql -h /tmp -p 5433 -d $db -c "CREATE EXTENSION vector; CREATE EXTENSION pg_trgm;"
+done
+# .env: DATABASE_URL=postgresql+psycopg://industry:<password>@127.0.0.1:5433/industry_intelligence
+
+# Service: inspect, restart (clean smart shutdown, then launchd starts it again), stop, start
+launchctl print gui/$(id -u)/local.industry-intelligence.postgresql
+launchctl kickstart -k gui/$(id -u)/local.industry-intelligence.postgresql
+launchctl bootout gui/$(id -u)/local.industry-intelligence.postgresql
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.industry-intelligence.postgresql.plist
+
+# Health checks
+$PGBIN/pg_isready -h /tmp -p 5433 -d postgres
+cd backend && ../.venv/bin/python -m industry_intelligence.cli source-health
+../.venv/bin/python -m industry_intelligence.cli data-quality-audit
+../.venv/bin/python -m industry_intelligence.cli intelligence-update --plan --skip-ai
+cd ..
+```
+
+The extensions are created once by the superuser; the migrations' `CREATE EXTENSION IF NOT
+EXISTS` is then a no-op, so the application role needs no superuser rights. If the `ii-pg16`
+environment is recreated or its `postgresql` package changes, rebuild and reinstall pgvector with
+the commands above before starting the service.
+
+**Backups (local policy).** A logical `pg_dump -Fc` before every migration, repair `--apply`,
+reviewed merge, or other risky change, and otherwise about weekly by hand; keep the last few and at
+least one copy off the Mac when convenient. There is no local backup timer; the production timer
+and `deploy/bin/backup.sh` stay production-only.
+
+```bash
+B="$HOME/Library/Application Support/industry-intelligence/backups"; mkdir -p "$B"; chmod 700 "$B"
+F="$B/native-industry_intelligence-$(date -u +%Y%m%dT%H%M%SZ).dump"
+$PGBIN/pg_dump -Fc -h /tmp -p 5433 -d industry_intelligence -f "$F" && chmod 600 "$F"
+$PGBIN/pg_restore --list "$F" | grep -c 'TABLE DATA'   # 35 today; restore from a file, not a pipe
+```
+
+**Restore.** Stop the scheduler (`launchctl bootout …daily-update`) and anything using the
+database, then restore as the superuser into a fresh database (ownership stays `industry`):
+
+```bash
+$PGBIN/dropdb -h /tmp -p 5433 industry_intelligence
+$PGBIN/createdb -h /tmp -p 5433 -O industry industry_intelligence
+$PGBIN/psql -h /tmp -p 5433 -d industry_intelligence -c "CREATE EXTENSION vector; CREATE EXTENSION pg_trgm;"
+$PGBIN/pg_restore -h /tmp -p 5433 -d industry_intelligence --exit-on-error "$F"
+# then: alembic current, data-quality-audit, source-health, intelligence-update --plan --skip-ai
+```
+
+**Rollback to the Docker database** (kept, not deleted, until several native scheduled runs have
+succeeded): the old volume `app_postgres_data` and the pre-migration dump
+(`backups/docker-industry_intelligence-20260930T015714Z.dump`) are retained.
+
+1. Stop using the native database (`launchctl bootout …daily-update` if a run is due, stop the API).
+2. In `.env`, restore the commented Docker `DATABASE_URL` line (`localhost:5432`).
+3. Open Docker Desktop and `docker compose up -d db` (the same volume; data as of the switch).
+4. `source-health`, `data-quality-audit`, `intelligence-update --plan --skip-ai`, then re-enable the scheduler.
+
+Writes made to the native database after the switch are not in the Docker volume; to keep them,
+restore a fresh native dump into the Docker database instead of using the old volume.
+
+**Known local-only differences** (the data is logically identical; measured 2026-09-30): the
+native server has no ICU, and macOS libc collation differs from the glibc `en_US.utf8` of the
+Docker/production image, so lists that sort by a name (for example `/companies` without a ranking
+filter, alias lists, name tie-breakers) can order a few names differently (CJK before Latin,
+spaces and case weighted differently). Derived data did not change: SearchDocument hashes
+(514/514), display names (516/516), and AI evidence order (22/22 Events) are identical, and
+pg_trgm produces the same trigram sets (their printed order differs because `char` is signed on
+macOS arm64), so Search similarity is unchanged.
 
 ## Deployment-1 — Production readiness
 

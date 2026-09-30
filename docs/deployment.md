@@ -6,11 +6,18 @@ launchd update at 10:00 Australia/Sydney) until the supervised cut-over
 ([cutover.md](cutover.md), Deployment-2B). Deployment-1 (audit) findings are kept below; §8 lists
 what Deployment-2A built and §9 the production operations; restores follow [restore.md](restore.md).
 
+**Local-1 (2026-09-30): local runtime ≠ production packaging.** The Mac's database is now native
+PostgreSQL 16 (launchd service, `127.0.0.1:5433`) and daily local operation no longer needs Docker
+Desktop (README "Local runtime"). Docker Compose remains the planned production mechanism; every
+Deployment-2A artifact below is unchanged. Where §1, §5, and §7 mention Docker Desktop for the
+local database, they record the Deployment-1 state.
+
 ## 1. Current runtime (development Mac)
 
 | Component | How it starts | What keeps it alive | State it owns | After reboot | Developer-machine dependency |
 | --- | --- | --- | --- | --- | --- |
-| PostgreSQL 16.15 + pgvector 0.8.6 + pg_trgm | `docker compose up -d` (`pgvector/pgvector:pg16`, container `app-db-1`) | Docker Desktop; container restart policy `no` | everything (named volume `app_postgres_data`) | down until Docker Desktop is opened and the container started (Docker Desktop is not a login item) | Docker Desktop, logged-in user |
+| PostgreSQL 16.15 + pgvector 0.8.6 + pg_trgm (since Local-1) | native: launchd agent `local.industry-intelligence.postgresql` (`postgres -D ~/Library/Application Support/industry-intelligence/postgresql16`, conda env `ii-pg16`), `127.0.0.1:5433` | launchd (`RunAtLoad`, `KeepAlive`) | everything (data directory above) | starts at login | logged-in user; conda env `ii-pg16` with a locally built pgvector |
+| (before Local-1; optional/rollback) PostgreSQL in Docker | `docker compose up -d` (`pgvector/pgvector:pg16`, container `app-db-1`, `127.0.0.1:5432`) | Docker Desktop; container restart policy `no` | named volume `app_postgres_data` (kept as rollback, stopped) | down until Docker Desktop is opened | Docker Desktop |
 | FastAPI | manually: `uvicorn industry_intelligence.main:app --reload` from `backend/` | nothing (terminal) | none (stateless) | down | manual start, `.venv` in the checkout |
 | Next.js | manually: `npm run dev` from `frontend/` | nothing (terminal) | none | down | manual start |
 | Daily update | launchd agent `local.industry-intelligence.daily-update`, 10:00 system time zone | launchd (per user) | writes PostgreSQL only | runs at the next 10:00 if the user is logged in | per-user LaunchAgent, logged-in session, `~/Documents` access of the Python app, root `.env` |
@@ -33,7 +40,7 @@ Current operation is **valid local operation**, not production.
 | Local assumption | Classification |
 | --- | --- |
 | Mac powered on, awake, user logged in at 10:00 | local-only limitation → irrelevant after deployment |
-| Docker Desktop started by hand; container restart policy `no` | production blocker if kept → replaced by a server runtime |
+| Docker Desktop started by hand; container restart policy `no` | production blocker if kept → replaced by a server runtime; locally resolved by Local-1 (native PostgreSQL launchd service) |
 | Python must reach the checkout under `~/Documents` (macOS privacy) | local-only limitation → irrelevant after deployment |
 | Per-user LaunchAgent | local-only limitation → replaced by a server scheduler |
 | Backend/frontend started from terminals, `--reload` / `next dev` | production blocker → process manager needed |
