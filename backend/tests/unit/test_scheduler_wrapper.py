@@ -1,5 +1,6 @@
-"""Scheduler-1: the launchd wrapper runs only ``intelligence-update --skip-ai`` and refuses to
-run when the system time zone is not Australia/Sydney."""
+"""Scheduler-1: the launchd wrapper runs only the bounded ``intelligence-update --ai-limit 12``
+(Product-1; ``--skip-ai`` before) and refuses to run when the system time zone is not
+Australia/Sydney."""
 
 import importlib.util
 import plistlib
@@ -20,7 +21,7 @@ def wrapper():
     return module
 
 
-def test_runs_only_the_skip_ai_update_from_backend(wrapper, monkeypatch):
+def test_runs_only_the_bounded_ai_update_from_backend(wrapper, monkeypatch):
     calls = []
 
     def run(command, **kwargs):
@@ -32,10 +33,19 @@ def test_runs_only_the_skip_ai_update_from_backend(wrapper, monkeypatch):
 
     assert wrapper.main([]) == 3
     [(command, kwargs)] = calls
-    assert command[1:] == ["-m", "industry_intelligence.cli", "intelligence-update", "--skip-ai"]
+    assert command[1:] == [
+        "-m",
+        "industry_intelligence.cli",
+        "intelligence-update",
+        "--ai-limit",
+        "12",
+    ]
     assert kwargs["cwd"] == wrapper.ROOT / "backend"
     assert sorted(kwargs["env"]) == ["HOME", "LANG", "PATH", "PYTHONUNBUFFERED"]
-    assert "--ai-limit" not in command
+    # Bounded: the cap is within the CLI's hard limit; the plan preflight is read-only.
+    from industry_intelligence.cli import _ai_event_cap
+
+    assert _ai_event_cap(command[-1]) == 12 and "--skip-ai" not in command
 
 
 def test_refuses_outside_sydney_without_running(wrapper, monkeypatch, capsys):

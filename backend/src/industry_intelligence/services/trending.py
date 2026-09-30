@@ -16,6 +16,11 @@ shown as a card and never gets an Event made for Trending; it is counted per lis
 ``pending_event_count``. Topics are the Event's derived Subject links, excluding ranked-story
 Subjects (``event`` type), which are the listed story itself rather than a topic. Company links
 are shown exactly as stored (DQ-3 rules unchanged). Page requests read persisted data only.
+
+Product-1: each card carries one short ``summary`` from persisted data only, in this order: the
+first point of the Event's displayable AI Summary (``ai_insights.available_summaries``: valid,
+current evidence and prompt, primary locale), else a stored publisher excerpt of one of its
+reports (``events.event_excerpts``), else ``None``. Nothing is generated on a request.
 """
 
 from __future__ import annotations
@@ -30,11 +35,13 @@ from industry_intelligence.adapters.source.content_registry import NEWS_RANKINGS
 from industry_intelligence.db.models import ContentItem, Event, EventContentLink
 from industry_intelligence.db.models.ingestion_batch import IngestionBatch
 from industry_intelligence.domain.enums import Domain, SubjectType
+from industry_intelligence.services.ai_insights import available_summaries
 from industry_intelligence.services.events import (
     _companies,
     _coverage,
     _subjects,
     _summary,
+    event_excerpts,
     resolve_event_redirect,
 )
 from industry_intelligence.services.news_ranking_ingestion import RESULT_KIND
@@ -75,7 +82,17 @@ def _content_ids(entries):
     return ids
 
 
-def domain_trending(session, domain, limit=DEFAULT_LIMIT):
+def card_summaries(session, event_ids):
+    """One short persisted summary per Event: displayable AI Summary, else a stored excerpt."""
+
+    if not event_ids:
+        return {}
+    output = event_excerpts(session, event_ids)
+    output.update(available_summaries(session, event_ids))
+    return output
+
+
+def domain_trending(session, domain, limit=DEFAULT_LIMIT, summaries=True):
     snapshots = current_snapshots(session, domain)
     lists, evidence = [], []
     for definition, batch in snapshots:
@@ -152,6 +169,7 @@ def domain_trending(session, domain, limit=DEFAULT_LIMIT):
     sources, languages = _coverage(session, shown) if shown else ({}, {})
     subjects = _subjects(session, shown) if shown else {}
     companies = _companies(session, shown) if shown else {}
+    summaries = card_summaries(session, shown) if summaries else {}
     items = []
     for event_id in shown:
         event_subjects = subjects.get(event_id, [])
@@ -170,6 +188,7 @@ def domain_trending(session, domain, limit=DEFAULT_LIMIT):
                     for subject in event_subjects
                     if subject["subject_type"] != str(SubjectType.EVENT)
                 ],
+                "summary": summaries.get(event_id),
             }
         )
     return {

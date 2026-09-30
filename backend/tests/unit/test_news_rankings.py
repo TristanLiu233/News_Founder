@@ -19,6 +19,7 @@ from industry_intelligence.adapters.source.content_registry import (
 )
 from industry_intelligence.adapters.source.news_rankings import (
     ArticleDetails,
+    EastmoneyClickRankAdapter,
     Game3DMHotAdapter,
     GematsuPopularAdapter,
     HackerNewsTopContentAdapter,
@@ -27,6 +28,8 @@ from industry_intelligence.adapters.source.news_rankings import (
     hn_story_id,
     parse_3dm_hot,
     parse_3dm_published,
+    parse_eastmoney_click_rank,
+    parse_eastmoney_published,
     parse_gematsu_article,
     parse_gematsu_popular,
     parse_sina_hot,
@@ -41,6 +44,8 @@ SINA = (FIXTURES / "sina_finance_hot.js").read_text(encoding="utf-8")
 GEMATSU = (FIXTURES / "gematsu_popular.html").read_text(encoding="utf-8")
 HOT_3DM = (FIXTURES / "3dm_news_hot.html").read_text(encoding="utf-8")
 GEMATSU_ARTICLE = (FIXTURES / "gematsu_article_identity.html").read_text(encoding="utf-8")
+EASTMONEY = (FIXTURES / "eastmoney_click_rank.html").read_text(encoding="utf-8")
+EASTMONEY_ARTICLE = (FIXTURES / "eastmoney_article.html").read_text(encoding="utf-8")
 
 
 def test_sina_click_rank_window_value_and_time_kept_exactly():
@@ -173,14 +178,18 @@ def test_ranked_item_requires_a_positive_rank():
 def test_registry_is_a_feed_mode_of_existing_publishers():
     assert list(NEWS_RANKINGS) == [
         "sina_finance_hot",
+        "eastmoney_click_rank",
         "gematsu_popular",
         "game_3dm_hot",
         "hacker_news_top",
     ]
     assert not set(NEWS_RANKINGS) & set(CONTENT_SOURCES)
     names = {definition.name for definition in NEWS_RANKINGS.values()}
-    assert names == {"新浪财经", "Gematsu", "3DM", "Hacker News"}
+    assert names == {"新浪财经", "东方财富", "Gematsu", "3DM", "Hacker News"}
+    # 东方财富 is the existing publisher of the 7×24 feed: one Source, a second feed mode.
+    assert CONTENT_SOURCES["eastmoney_news"].name == NEWS_RANKINGS["eastmoney_click_rank"].name
     assert NEWS_RANKINGS["sina_finance_hot"].domain == Domain.FINANCE
+    assert NEWS_RANKINGS["eastmoney_click_rank"].domain == Domain.FINANCE
     assert NEWS_RANKINGS["gematsu_popular"].domain == Domain.GAMING
     assert NEWS_RANKINGS["game_3dm_hot"].domain == Domain.GAMING
     assert NEWS_RANKINGS["hacker_news_top"].domain == Domain.COMPUTER
@@ -331,6 +340,7 @@ def test_list_semantics_are_the_publishers_own():
     semantics = {key: (d.list_key, d.list_name, d.ranking_kind) for key, d in NEWS_RANKINGS.items()}
     assert semantics == {
         "sina_finance_hot": ("news_click_day", "热门新闻排行 · 新闻榜 · 点击量排行", "click_count"),
+        "eastmoney_click_rank": ("reader_click_rank", "网友点击排行榜", "click_rank"),
         "gematsu_popular": ("popular_posts", "Popular Posts", "popular"),
         "game_3dm_hot": ("recent_hot", "近期热门", "hot"),
         "hacker_news_top": ("top_stories", "Top Stories", "top"),
@@ -342,6 +352,9 @@ def test_list_semantics_are_the_publishers_own():
     # Only Sina states a period: the publisher's daily list for a Beijing calendar date.
     _, _, window = parse_sina_hot(SINA, NOW)
     assert window == "day:2026-09-30"
+    # 东方财富 names the basis (reader clicks) but no period and no click counts: none is set.
+    entries, _ = parse_eastmoney_click_rank(EASTMONEY, NOW)
+    assert {entry.native_value for entry in entries} == {None}
     assert parse_3dm_hot(HOT_3DM, NOW) and NEWS_RANKINGS["hacker_news_top"].reuse_ranking == (
         "hacker_news"
     )
@@ -418,3 +431,95 @@ def test_adapters_without_article_pages_are_never_looked_up():
         complete_article_details(adapter, [_entry(1, "https://a.example/x")], set())
     )
     assert adapter.calls == [] and counts["lookups"] == 0 and len(completed) == 1
+
+
+# --- 东方财富 网友点击排行榜 (Product-1) ------------------------------------------------------
+
+
+def test_eastmoney_click_rank_is_the_publishers_numbered_list_with_article_codes():
+    entries, failed = parse_eastmoney_click_rank(EASTMONEY, NOW)
+    assert failed == 0
+    assert [entry.rank for entry in entries] == list(range(1, 11))
+    first = entries[0]
+    assert first.item.title == (
+        "央行调整完善若干货币政策工具：下调抵押补充贷款（PSL）利率0.25个百分点"
+    )
+    assert first.item.url == "https://finance.eastmoney.com/a/202609293886558061.html"
+    # The article code is the publisher's stable ID, the same one its 7×24 feed rows carry.
+    assert first.item.external_id == "202609293886558061"
+    assert first.item.language == "zh-CN" and first.item.observed_at is NOW
+    # The list shows no date and no click count; neither is synthesized.
+    assert {entry.item.published_at for entry in entries} == {None}
+    assert {entry.native_value for entry in entries} == {None}
+
+
+def test_eastmoney_editorial_topics_block_is_never_read_as_a_ranking():
+    entries, _ = parse_eastmoney_click_rank(EASTMONEY, NOW)
+    urls = {entry.item.url for entry in entries}
+    assert not any("topic.eastmoney.com" in url for url in urls)
+    assert len(entries) == 10
+
+
+def test_eastmoney_rank_is_the_printed_number_and_bad_rows_are_not_renumbered():
+    base = "https://finance.eastmoney.com/a/20260929000000000"
+    rows = [
+        ("1", f"{base}1.html", "甲"),
+        ("2", "https://example.com/a/202609290000000002.html", "外站"),
+        ("x", f"{base}3.html", "无序号"),
+        ("4", f"{base}4.html", " "),
+        ("5", f"{base}5.html", "戊"),
+    ]
+    items = "".join(
+        f'<li><span class="no">{no}</span> <a href="{url}">{title}</a></li>'
+        for no, url, title in rows
+    )
+    html = f'<div class="Wydj"><h2>网友点击排行榜</h2><ul>{items}</ul></div>'
+    entries, failed = parse_eastmoney_click_rank(html, NOW)
+    assert [(entry.rank, entry.item.title) for entry in entries] == [(1, "甲"), (5, "戊")]
+    assert failed == 3
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<html><body><h2>热点扫描</h2><ul><li><a href='x'>y</a></li></ul></body></html>",
+        "<div class='Wydj'><h2>网友点击排行榜</h2></div>",
+    ],
+)
+def test_eastmoney_missing_click_rank_block_raises(html):
+    with pytest.raises(ValueError):
+        parse_eastmoney_click_rank(html, NOW)
+
+
+def test_eastmoney_article_time_is_beijing_time_and_absent_when_not_stated():
+    assert parse_eastmoney_published(EASTMONEY_ARTICLE) == datetime(2026, 9, 30, 1, 30, tzinfo=UTC)
+    undated = "<div class='infos'><div class='item'>来源：x</div></div>"
+    assert parse_eastmoney_published(undated) is None
+    assert parse_eastmoney_published("<html></html>") is None
+
+
+def test_eastmoney_adapter_reads_the_list_page_and_article_pages(settings):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.path == "/a/crdsm.html":
+            return httpx.Response(200, text=EASTMONEY)
+        return httpx.Response(200, text=EASTMONEY_ARTICLE)
+
+    async def run():
+        async with _client(settings, handler) as http:
+            adapter = EastmoneyClickRankAdapter(http, 3)
+            entries = await adapter.fetch()
+            details = await adapter.article_details(entries[2].item.url)
+            return adapter, entries, details
+
+    adapter, entries, details = asyncio.run(run())
+    assert seen == [
+        "https://finance.eastmoney.com/a/crdsm.html",
+        "https://finance.eastmoney.com/a/202609303887324382.html",
+    ]
+    assert [entry.rank for entry in entries] == [1, 2, 3] and adapter.window is None
+    assert adapter.lookup_articles and adapter.failed_count == 0
+    # The row already carries the article code; the page only adds the publication time.
+    assert details == ArticleDetails(datetime(2026, 9, 30, 1, 30, tzinfo=UTC), None)

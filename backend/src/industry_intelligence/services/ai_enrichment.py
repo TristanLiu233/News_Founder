@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
 
@@ -28,6 +28,7 @@ from industry_intelligence.ai.prompts.event_insights import INSIGHT_PROMPTS
 from industry_intelligence.ai.provider import AIProviderError, generate_with_retry
 from industry_intelligence.ai.providers import build_provider
 from industry_intelligence.db.models import AIArtifact, Event, EventRedirect
+from industry_intelligence.domain.enums import Domain
 from industry_intelligence.services.ai_evidence import (
     input_hash,
     load_event_evidence,
@@ -42,6 +43,10 @@ from industry_intelligence.services.events import resolve_event_redirect
 ENTITY_EVENT = "event"
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 100
+# Product-1: the unattended ``intelligence-update`` AI stage is capped per run (never "all").
+DEFAULT_MAX_EVENTS = 12
+AI_MAX_EVENTS = 15
+SELECTION_RULE = "trending_then_recent_round_robin"
 # Failures that a later run may retry without a reviewer: the provider never produced a checked
 # answer (network, rate limit, server, authentication, configuration). A validation failure,
 # refusal, or malformed answer was a real (paid) answer and is not retried unattended.
@@ -87,7 +92,7 @@ def select_events(
 ):
     """Canonical, non-empty Events: the given IDs (redirects followed) or the most recent ones."""
 
-    if event_ids:
+    if event_ids is not None:
         ids = []
         for event_id in event_ids:
             canonical = resolve_event_redirect(session, event_id)
@@ -105,6 +110,83 @@ def select_events(
     return session.scalars(
         query.order_by(Event.last_published_at.desc(), Event.id).limit(limit)
     ).all()
+
+
+def validate_max_events(value):
+    """The bounded AI stage's Event cap: an integer in 1..``AI_MAX_EVENTS``, else ValueError."""
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("the AI Event cap must be an integer")
+    if not 1 <= value <= AI_MAX_EVENTS:
+        raise ValueError(f"the AI Event cap must be between 1 and {AI_MAX_EVENTS}")
+    return value
+
+
+def _eligible(session, event_id):
+    """Existing Phase 7 eligibility: a canonical, non-empty Event with a primary locale."""
+
+    if resolve_event_redirect(session, event_id) != event_id:
+        return False
+    event = session.get(Event, event_id)
+    if event is None or event.content_count <= 0:
+        return False
+    evidence = load_event_evidence(session, event_id)
+    return bool(evidence and evidence.items) and primary_locale(evidence) is not None
+
+
+def select_bounded_events(session, max_events=DEFAULT_MAX_EVENTS):
+    """Deterministic, capped Event sample for the unattended AI stage (Product-1).
+
+    Per domain (``Domain`` order: computer, finance, gaming), candidates are the Events currently
+    on that domain's Trending (the Trending read model's own order: list catalog order, then each
+    publisher's native rank), then the domain's most recently reported Events
+    (``last_published_at`` desc, ID). Only eligible Events count (``_eligible``). The domains are
+    then taken round-robin, one Event each in turn, until ``max_events``; a domain that runs out
+    is skipped. No score is computed and no AI is used to choose; an Event already enriched is
+    still selected (its cached artifacts cost no request).
+    """
+
+    from industry_intelligence.services.trending import domain_trending
+
+    max_events = validate_max_events(max_events)
+    queues = {}
+    for domain in Domain:
+        trending = domain_trending(session, domain, limit=None, summaries=False)
+        candidates = [UUID(item["event"]["id"]) for item in trending["items"]]
+        candidates += session.scalars(
+            select(Event.id)
+            .where(
+                Event.domain == domain,
+                Event.content_count > 0,
+                Event.id.not_in(select(EventRedirect.duplicate_id)),
+            )
+            .order_by(Event.last_published_at.desc(), Event.id)
+            .limit(max_events * 4)
+        ).all()
+        queue, seen = [], set()
+        for event_id in candidates:
+            if event_id in seen:
+                continue
+            seen.add(event_id)
+            if _eligible(session, event_id):
+                queue.append(event_id)
+            if len(queue) == max_events:
+                break
+        queues[str(domain)] = queue
+    return round_robin([queues[str(domain)] for domain in Domain], max_events)
+
+
+def round_robin(queues, limit):
+    """One item from each queue in turn (queue order kept), skipping empty queues, up to
+    ``limit`` items. Pure; the queues are not modified."""
+
+    queues = [list(queue) for queue in queues]
+    selected = []
+    while len(selected) < limit and any(queues):
+        for queue in queues:
+            if queue and len(selected) < limit:
+                selected.append(queue.pop(0))
+    return selected
 
 
 def find_cached(session, entity_type, entity_key, spec, locale, digest, provider=None, model=None):
@@ -182,6 +264,9 @@ async def generate_artifact(
         artifact.status = "failed"
         artifact.error_code = exc.code
         artifact.artifact_metadata = {"attempts": getattr(exc, "attempts", 1)}
+        if getattr(exc, "authentication", False):
+            # The credential was refused: the batch stops here (see ``enrich_events``).
+            artifact.artifact_metadata["authentication_failed"] = True
         return artifact
     artifact.model = response.model or provider.model
     outcome = validate_output(spec, response.data, mapping, items, locale, source_count)
@@ -244,6 +329,8 @@ def _plan(session, events, artifact_types, locales, provider, skip_settled=False
     request or write) when ``locales`` names a non-primary locale of a selected Event."""
 
     tasks, counts, planned, refused = [], Counter(), [], []
+    # Per selected Event: what its tasks would do (the plan printed before a bounded run).
+    rows = {}
     for event in events:
         evidence = load_event_evidence(session, event.id)
         if evidence is None or not evidence.items:
@@ -255,6 +342,7 @@ def _plan(session, events, artifact_types, locales, provider, skip_settled=False
                 counts["skipped_no_primary_locale"] += 1
             continue
         planned.append((event, evidence, locale))
+        rows[str(event.id)] = {**_event_row(event, evidence), "tasks": Counter()}
     if refused:
         raise CrossLanguageGenerationDisabled(refused)
     for event, evidence, locale in planned:
@@ -287,10 +375,12 @@ def _plan(session, events, artifact_types, locales, provider, skip_settled=False
                 settled = _settled_attempt(session, str(event.id), spec, locale, digest)
                 if settled:
                     counts[f"skipped_{settled}"] += 1
+                    rows[str(event.id)]["tasks"][f"skipped_{settled}"] += 1
                     continue
             if stale:
                 counts["stale"] += 1
             counts["cached" if cached else "would_generate"] += 1
+            rows[str(event.id)]["tasks"]["cached" if cached else "would_generate"] += 1
             tasks.append(
                 {
                     "event": event,
@@ -302,7 +392,9 @@ def _plan(session, events, artifact_types, locales, provider, skip_settled=False
                     "stale": stale is not None,
                 }
             )
-    return tasks, counts
+    for row in rows.values():
+        row["tasks"] = dict(row["tasks"])
+    return tasks, counts, list(rows.values())
 
 
 def _event_row(event, evidence):
@@ -347,18 +439,15 @@ async def enrich_events(
         provider = build_provider(settings)
     with session_factory() as session:
         events = select_events(session, event_ids, since, domain, limit)
-        tasks, counts = _plan(session, events, artifact_types, locales, provider, skip_settled)
-        event_rows = {}
-        for task in tasks:
-            event_rows.setdefault(
-                str(task["event"].id), _event_row(task["event"], task["evidence"])
-            )
+        tasks, counts, event_rows = _plan(
+            session, events, artifact_types, locales, provider, skip_settled
+        )
     result = {
         "dry_run": dry_run,
         "provider": provider.name if provider else settings.ai_provider,
         "model": provider.model if provider else settings.ai_model,
         "provider_configured": settings.ai_configured,
-        "events": list(event_rows.values()),
+        "events": event_rows,
         "tasks": len(tasks),
         "cached": counts["cached"],
         "stale": counts["stale"],
@@ -372,8 +461,8 @@ async def enrich_events(
     if dry_run:
         return result
     outcomes, statuses, errors = Counter(), [], Counter()
-    requests = 0
-    for task in tasks:
+    requests, aborted, not_attempted = 0, None, 0
+    for index, task in enumerate(tasks):
         event_key = str(task["event"].id)
         if task["cached"]:
             outcomes["cached"] += 1
@@ -405,6 +494,7 @@ async def enrich_events(
             sleep=sleep,
         )
         status, error_code, artifact_id = artifact.status, artifact.error_code, str(artifact.id)
+        refused = bool(artifact.artifact_metadata.get("authentication_failed"))
         with session_factory.begin() as session:
             if status == "valid":
                 outcomes["stale_marked"] += mark_stale(
@@ -442,6 +532,11 @@ async def enrich_events(
                 "artifact_id": artifact_id,
             }
         )
+        if refused:
+            # Never repeat a refused credential: the remaining tasks are not attempted.
+            aborted = "authentication_failed"
+            not_attempted = sum(1 for rest in tasks[index + 1 :] if not rest["cached"])
+            break
     return {
         **result,
         "requests": requests,
@@ -450,5 +545,7 @@ async def enrich_events(
         "replayed": outcomes["cached"],
         "stale_marked": outcomes["stale_marked"],
         "errors": dict(errors),
+        "aborted": aborted,
+        "not_attempted": not_attempted,
         "results": statuses,
     }

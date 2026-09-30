@@ -17,6 +17,7 @@ from industry_intelligence.adapters.source.news_feeds import (
     TechCrunchAdapter,
 )
 from industry_intelligence.adapters.source.news_rankings import (
+    EastmoneyClickRankAdapter,
     Game3DMHotAdapter,
     GematsuPopularAdapter,
     HackerNewsTopContentAdapter,
@@ -183,6 +184,20 @@ NEWS_RANKINGS = {
             SinaFinanceHotAdapter.page_url,
             SinaFinanceHotAdapter,
             "API",
+            "zh-CN",
+        ),
+        # Product-1: the reader click ranking printed on 东方财富's finance column pages (a second
+        # feed mode of the 7×24 publisher; no period and no click counts are published).
+        NewsRankingDefinition(
+            "eastmoney_click_rank",
+            "东方财富",
+            Domain.FINANCE,
+            "reader_click_rank",
+            "网友点击排行榜",
+            "click_rank",
+            EastmoneyClickRankAdapter.page_url,
+            EastmoneyClickRankAdapter,
+            "HTML",
             "zh-CN",
         ),
         NewsRankingDefinition(

@@ -23,20 +23,21 @@ planned or speculative results in a finished entry.
 - A chronological feed position is recency, never a rank.
 - Source access honours robots.txt and publisher policy with the application's honest
   `HTTPClient`; blocked sources are recorded, never worked around.
-- Scheduled AI stays off (`intelligence-update --skip-ai`); page requests never call AI.
+- Scheduled AI is bounded (Product-1): the local scheduler runs `intelligence-update --ai-limit 12`
+  (hard cap 15 in code, deterministic selection, cache first, provider preflight); page and GET
+  requests never call AI, a crawler, or the update. AI never mutates canonical (Layer-2) data.
 - Read `AGENTS.md` and the current code, migrations, and tests before relying on any plan.
 
 ## Current Baseline
 
-- Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1).
-- Backend: pytest 785 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
-  `industry_intelligence_test`; unit 585; Ruff check and format check clean (after
-  Trending-1.1).
+- Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1 and Product-1).
+- Backend: pytest 822 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
+  `industry_intelligence_test`; unit 613; Ruff check and format check clean (after Product-1).
 - Frontend: ESLint, TypeScript, and the Next.js production build (11 routes) pass.
 - Live dev database: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health`
-  29/29 healthy (25 earlier sources + 4 publisher ranked lists).
-- Local runtime: native PostgreSQL 16 (Local-1); daily launchd `intelligence-update --skip-ai`
-  at 10:00 Australia/Sydney.
+  30/30 healthy (25 earlier sources + 5 publisher ranked lists).
+- Local runtime: native PostgreSQL 16 (Local-1); daily launchd `intelligence-update --ai-limit 12`
+  at 10:00 Australia/Sydney (bounded AI since Product-1; `--skip-ai` before).
 
 ## Development Entry Template
 
@@ -497,3 +498,259 @@ No data-model change and no migration (head `20260930_12`). Snapshot `result` ga
 
 Owner decisions: the reviewed Event merge for the Gematsu duplicate; catalog coverage for
 Topics; Computer ranked lists (IT之家 日榜 / 虎嗅) remain deferred.
+
+## 2026-09-30 — Product-1 — Event-First Home, Source Expansion & Controlled AI
+
+Status: complete (2026-09-30).
+
+### Starting state
+
+- Branch `phase-7` at `3de5108` ("fix: harden native-ranked Trending ingestion and article
+  identity"), clean working tree, no remote, nothing pushed. Alembic head `20260930_12`.
+- Baseline (actual, rerun before any change): pytest **785 passed, 1 skipped** (pre-existing
+  Hacker News skip) on the isolated `industry_intelligence_test`; Ruff check clean, Ruff format
+  check clean (178 files incl. `ops/`); `data-quality-audit` 0 errors / 0 warnings / 6 info
+  (exit 0) on the dev database; frontend ESLint, TypeScript, and Next.js production build (11
+  routes, isolated scratchpad copy) pass.
+
+### Scope
+
+- A: Home becomes Event-first (Trending Events as the first major section), reusing the
+  Event-centric Trending read model; one short summary per card from persisted data only.
+- B: qualify native ranked-news capabilities (HN beststories, TapTap, IGN, Kotaku, EastMoney);
+  implement only what passes the qualification audit.
+- C: bounded, deterministic, cache-first scheduled AI through the existing Phase 7 pipeline;
+  enable it in the local scheduler only if every safety gate is proven.
+
+### Explicit exclusions
+
+No Event clustering, Subject identity, entity-threshold, or EventCompanyLink change; no
+bilingual AI; no AI ranking or hotness score; no Redis or generic cache; no PostgreSQL,
+deployment, or scheduler-time change; no Docker dependency; no bulk AI generation; no push.
+
+### Audit D — Home (before any change)
+
+- Home page: `frontend/app/page.tsx` (client component; module-level loaders, per-section
+  `useLoad`). Order was: dashboard header with domain links → Today at a Glance
+  (`/api/v1/news` × 3) → Latest Events (`/api/v1/events?limit=5`) → Trending Events
+  (`/api/v1/trending?limit=5`, third section) → External Company Rankings.
+- Trending section / Event card: `TrendingEventCard` in `frontend/components/shared.tsx`
+  (compact on Home); types in `frontend/lib/api.ts`; read model
+  `backend/src/industry_intelligence/services/trending.py` (`domain_trending`) behind
+  `GET /api/v1/trending` (`api/sources.py`). Home already reused this read model; no second
+  query or ranking existed.
+- AI artifact selection: `services/ai_insights.py` (`_insight`: `available` only for a `valid`
+  artifact whose input hash equals the current evidence + primary prompt hash in the Event's
+  primary locale; `failed`/`rejected`/`stale`/`not_generated` otherwise; legacy cross-language
+  rows never read). Only Event Detail used it.
+- Summary fallback: none. Events have no summary column; the only persisted non-AI text is
+  `ContentItem.description` (publisher excerpt ≤ 280 characters). Live: of the 12 Trending
+  cards Home would show, 3 (Gematsu) had an excerpt; Hacker News, 新浪财经, and 3DM rows have
+  none.
+- i18n: shared strings in `frontend/lib/i18n.tsx` (`common`), page strings in the Home `copy`;
+  CSS in `frontend/app/globals.css`.
+
+### Audit E — source capability and compliance
+
+All requests with the application's honest User-Agent, serially, robots.txt first, one request
+per page.
+
+| Candidate | Domain | Native signal | News/Event vs Entity | Compliance | Decision | Reason |
+| --- | --- | --- | --- | --- | --- | --- |
+| Hacker News `beststories` | computer | official Firebase list (HN's own "best": highest-voted recent) | news (link submissions) | official API | Deferred | 200 ids; 23 of its first 30 are not in the stored Top 30, but it is the same publisher and the same kind of link submission as Top Stories (Computer already shows 30 HN cards, Home 4); +31 requests per run for no new publisher breadth |
+| TapTap 热门/热玩/热卖/预约/新品榜 | gaming | native ranked lists | **entity** (games) | robots allows `/top/*`, but the list data comes from `/webapiv2/app-top/v2/hits`, which robots.txt disallows (serialized into the page) | Deferred | entity ranking (never an Event rank); its only machine form is a robots-disallowed internal API; no Event consumer; not needed for the Home question |
+| IGN | gaming | — | — | robots.txt header: automated retrieval prohibited without written permission (Ziff Davis) | Deferred | publisher policy; no page fetched |
+| Kotaku | gaming | none on the homepage (only "Latest"; RSS `/feed` is chronological) | news, chronological | robots allows `/` (Cloudflare-fronted, 200) | Deferred | no Popular/Most Read/Trending section; chronology is not popularity |
+| 东方财富 网友点击排行榜 | finance | `native_numeric_rank`: the publisher prints positions 1–10 (`span.no`) under "网友点击排行榜" (reader click ranking); no click counts and no period stated | news articles (`finance.eastmoney.com/a/<code>.html`) | `finance.eastmoney.com/robots.txt` 404 (allowed, RFC 9309); `www.eastmoney.com/robots.txt` `Allow: /`; static HTML on the 热点扫描 column page | **Implemented** | explicit native popularity list of an existing publisher; stable article code shared with its 7×24 feed |
+| 东方财富 专题 | finance | `editorial_hot_selection` (dated editorial topics) | topics | same page | not a ranking | editorial selection, never read as a rank |
+| 东方财富 热点扫描 column | finance | `chronological_feed` | news | same page | not a ranking | chronological column |
+
+### Audit F — AI pipeline, CLI, scheduler
+
+- `intelligence-update` ran the AI stage whenever a provider was configured and `--skip-ai` was
+  absent; `--ai-limit` (default 10) had **no upper bound** (any integer was accepted) and chose
+  the N most recent Events of any domain (`ai_enrichment.select_events`).
+- Cache: `find_cached` (input hash + provider + model), `mark_stale`, `_settled_attempt`
+  (`skip_settled`) — reused unchanged.
+- Validators: `ai_evidence.validate_output` (schema, own-Event evidence refs, advice/prediction,
+  single-source, figures, locale) — reused unchanged; primary prompts `event_summary_v4` /
+  `event_why_it_matters_v6` unchanged.
+- No code-level provider precheck existed (Phase 7.1 used a manual `models.retrieve`). A 401/403
+  became `AIRequestRejected` and the batch continued with the same credential (one failed
+  artifact per task).
+- Scheduler: `ops/scheduler/daily_update.py` hardcoded `--skip-ai`; the launchd plist only runs
+  the wrapper; production `deploy/systemd/industry-intelligence-update.service` runs
+  `--skip-ai` (not deployed).
+- The explicit `ai-event-enrich` command (limit ≤ 100) is a separate manual command and stays
+  unchanged.
+
+### Design decisions
+
+- Home is Event-first: the Trending read model is the hero (4 Events per domain, three columns
+  from 56rem, one column on phones); Today at a Glance and Latest Events follow as secondary
+  sections, then External Company Rankings, then an Explore row (Companies entry and a Search
+  form that navigates to `/search?q=`). `/today` and its backend are unchanged.
+- Card summary (`trending.card_summaries`, added to each Trending item as `summary`): (1) the
+  first point of the Event's displayable AI Summary (`ai_insights.available_summaries`, exactly
+  the `available` state), else (2) a stored publisher excerpt of one of its reports
+  (`events.event_excerpts`: representative report first, then publication order;
+  `clean_excerpt` collapses whitespace, drops a trailing "Read more"/"[…]", and discards
+  excerpts shorter than 20 characters or repeating the headline), else `null` — the card then
+  has no summary line. There is no persisted non-AI Event summary to use between (1) and (2).
+  The UI labels the text "AI summary"/"AI 摘要" or "Excerpt · <source>"/"摘录 · <source>" and
+  marks it with its own `lang`. No new type (`HomeEvent`, score) exists.
+- EastMoney is a second feed mode of the existing 东方财富 `Source` (`NewsRankingDefinition`
+  `eastmoney_click_rank`, catalog order after 新浪财经): rank = the printed number (never
+  recounted), `ranking_kind` `click_rank` (the publisher's own label), `window` none,
+  `native_value` none; external ID = the article code, so an article already stored from the
+  7×24 feed is the same ContentItem; new articles get their publication time from the article
+  page (`div.infos`, Beijing time; 1 s apart; only for URLs not stored yet).
+- Bounded AI (`ai_enrichment.select_bounded_events`, rule `trending_then_recent_round_robin`):
+  per domain (computer, finance, gaming), candidates are the Events on that domain's Trending in
+  the Trending read model's own order (list catalog order, then native rank), then the domain's
+  most recently reported Events (`last_published_at` desc, ID); only eligible Events count
+  (canonical, non-empty, not a redirect shell, primary locale present — the Phase 7 rule);
+  domains are taken round-robin until the cap. No score, no AI in selection. Trending-first
+  was chosen over pure recency so AI summaries land on the Events Home shows first; this uses
+  only publisher-native list membership and order already shown. The rule does not force a
+  single/multi-source mix (live Trending Events are single-source).
+- Cap: `--ai-limit` default 12, allowed 1–15 (`validate_max_events`; argparse type, and
+  `run_update`/`execute_update`/`plan_update` refuse before any lock, request, or write). The
+  option name was kept (repository-consistent) instead of adding `--ai`/`--ai-max-events`.
+- Cache first: the stage plans with the provider identity first (`enrich_events(dry_run=True)`);
+  only when a task needs generating is the provider preflighted (`ai.provider.preflight`;
+  Anthropic: Models API `GET /v1/models/{model}`, no Messages request). A refused preflight
+  fails the stage (`provider_preflight_failed`, 0 requests). A 401/403 during generation
+  (`AIAuthenticationFailed`, still stored as `request_rejected`) stops the batch; the remaining
+  tasks are reported `not_attempted`. A failed AI stage only degrades a run (unchanged).
+- Scheduler: all gates proven (below), so the launchd wrapper runs
+  `intelligence-update --ai-limit 12` (≤ 24 primary-locale requests per run, usually fewer
+  because cached artifacts replay). Time, plist, lock, and exit codes unchanged; `--skip-ai`
+  stays the documented rollback (`AI_ARGS` in the wrapper). Production systemd stays
+  `--skip-ai` (deployment out of scope).
+
+### Data-model decision
+
+No migration (head `20260930_12`). `GET /api/v1/trending` items gain the additive `summary`
+field; EastMoney snapshots are ordinary `IngestionBatch` rows (`result.kind = news_ranking`,
+`news:eastmoney_click_rank`). `StageResult` gains an output-only `details` list (the AI stage's
+per-Event plan), not stored in `update_runs`.
+
+### Files changed
+
+- Backend: `adapters/source/news_rankings.py` (`parse_eastmoney_click_rank`,
+  `parse_eastmoney_published`, `EastmoneyClickRankAdapter`), `adapters/source/content_registry.py`
+  (`eastmoney_click_rank`), `ai/provider.py` (`AIAuthenticationFailed`, `preflight`),
+  `ai/providers/anthropic.py` (401/403 mapping, `preflight`), `services/ai_enrichment.py`
+  (cap, `select_bounded_events`, `round_robin`, per-Event plan rows, stop on refused
+  credential, `event_ids is not None`), `services/ai_insights.py` (`available_summaries`),
+  `services/events.py` (`clean_excerpt`, `event_excerpts`), `services/trending.py`
+  (`card_summaries`, `summary`, `summaries=` switch), `services/intelligence_update.py`
+  (bounded AI stage, cap validation, `details`, text output), `cli.py` (`--ai-limit` type).
+- Frontend: `app/page.tsx` (hierarchy, hero, Search entry), `components/shared.tsx`
+  (`TrendingEventCard` `showSummary`), `lib/api.ts` (`EventCardSummary`), `lib/i18n.tsx`
+  (summary labels), `app/globals.css` (hero, summary, Explore).
+- Ops: `ops/scheduler/daily_update.py` (`--ai-limit 12`).
+- Tests/fixtures: new `tests/fixtures/eastmoney_click_rank.html`,
+  `tests/fixtures/eastmoney_article.html` (trimmed live captures), new
+  `tests/unit/test_bounded_ai.py`, new `tests/integration/test_product1_postgres.py`; updated
+  `tests/unit/test_news_rankings.py`, `tests/unit/test_ai_provider.py`,
+  `tests/unit/test_scheduler_wrapper.py`, `tests/integration/test_trending_postgres.py`,
+  `tests/integration/test_operations_postgres.py`.
+- Docs: `DEVELOPMENT.md`, `AGENTS.md`, `CLAUDE.md`, `README.md`.
+
+### Tests
+
+- Order kept for the new source: fixtures → parser tests → adapter test → implementation →
+  registry → ingestion → consumer → live smoke.
+- `test_news_rankings.py` 24 → 31: numbered list with article codes; editorial 专题 never read;
+  printed number kept and bad rows dropped without renumbering; missing block raises (2);
+  article time is Beijing time or absent; adapter requests; registry is a feed mode of the
+  existing 东方财富 Source; list semantics (no window, no value).
+- `test_ai_provider.py` 26 → 30: 401/403 → `AIAuthenticationFailed` with one request; preflight
+  uses only the Models API and maps a refusal; providers without a preflight pass.
+- New `test_bounded_ai.py` (17): default 12 / cap 15; out-of-range or non-integer caps refused
+  (8); CLI refuses `0`, `16`, `all`, `unlimited`, `335`, empty; round-robin balancing and
+  exhaustion (pure, deterministic); `execute_update`/`run_update`/`plan_update` refuse an invalid
+  cap before the lock or any stage.
+- New `test_product1_postgres.py` (9, `*_test` only): capped deterministic round-robin; Trending
+  Events before more recent ones; mixed-language and redirected Events never selected;
+  cache-first stage (4 requests + 1 preflight, then 0 requests and no preflight); refused
+  preflight → 0 requests, no artifact, run degraded; refused credential mid-batch → 1 request,
+  1 failed artifact, 3 not attempted; validator rejection stays failed and is never rendered
+  (excerpt shown instead); card summary priority (excerpt → valid AI; stale, rejected, failed
+  ignored; none → absent); GET requests (13 routes incl. `/trending`, `/today`, Event
+  detail/content/AI, news, search) with provider, update, ingestion, and `HTTPClient.get`
+  replaced by failures, and every `/api/` route GET/HEAD only.
+- Updated: Trending API card keys include `summary` (None without excerpt/AI); run options
+  record `ai_limit` 12; scheduler wrapper runs `--ai-limit 12`.
+- Results: pytest **822 passed, 1 skipped** (isolated test DB); unit **613**; Ruff check and
+  format check clean; ESLint, TypeScript, Next.js production build (11 routes, isolated copy)
+  pass.
+
+### Real-data verification (2026-09-30)
+
+- Backup first: `native-industry_intelligence-20260930T075557Z-pre-product-1.dump` (35
+  table-data entries, `PGDMP` header).
+- EastMoney live smoke: `intelligence-update --skip-ai --source eastmoney_click_rank` (run
+  `20260930T075604Z-11d2b497`) → **SUCCESS, exit 0**; 11 requests (list page 1 + 10 article
+  pages), all HTTP 200; fetched 10, stored 10, replayed 0, invalid 0; 10/10 publication times
+  found, window none, native value none; Events +10 (seeds), ContentItems +10, Subjects +0;
+  audit 0/0; `source-health` **30/30 healthy** (`eastmoney_click_rank` success). Finance
+  Trending: 新浪财经 (20) then 东方财富 网友点击排行榜 #1–#10; pending 0.
+- AI plan (read-only, `--plan --ai-limit 10`): 10 Events (computer 4, finance 3, gaming 3),
+  20 tasks, 0 cached, 20 to generate; every Event single-source, primary locale en ×7 /
+  zh-CN ×3.
+- AI smoke: `intelligence-update --ai-limit 10 --source cmc_tech_market_cap` (run
+  `20260930T080441Z-6730efde`; the CompaniesMarketCap source replayed the stored daily
+  snapshot, so Trending and the selection did not change) → **SUCCESS, exit 0**: selected 10,
+  cached 0, provider preflight 1 (`GET /v1/models/<model>` 200), Messages requests 20 (all HTTP
+  200), valid 20, validation failures 0, other failures 0, rejected 0; 28,748 input / 1,363
+  output tokens; model `claude-sonnet-5`; `ai_artifacts` 209 → 229 (valid 81); every other
+  table unchanged; no credential in logs. Afterwards the plan shows 20/20 cached, 0 to
+  generate; the default-cap plan (12) would generate only 4 tasks.
+- Human audit (all 20 artifacts against the persisted evidence): 18 clean passes; 2 minor notes
+  — `d4863980` zh-CN Summary adds 计划 ("plans") and 被视为 to the headline "A股利好！又一批增持
+  回购来了" (framing word not in the evidence); `04197252` Why It Matters says "among other
+  platforms" from a truncated excerpt ending "and …". 0 wrong numbers, 0 advice or prediction,
+  0 wrong evidence refs, 0 language issues. 9 of 10 Why It Matters correctly abstain
+  (`insufficient_evidence`): 8 of 10 Events are headline-only reports. Neither note was
+  rejected (owner decision; `ai-artifact-reject` hides an artifact).
+- Scheduler gate: cap enforced in code (unit), cache reuse (integration + live 20/20 cached),
+  provider preflight (integration + live), validators unchanged and mandatory, 10-Event smoke
+  success, GET never invokes a provider (integration + browser). → wrapper switched to
+  `--ai-limit 12`; `env -i` wrapper `--plan` exit 0; `launchctl print` shows the agent loaded,
+  `Hour` 10 `Minute` 0, last exit 0.
+- Browser (isolated production build on 3070 against the API on 8070, live DB): Home sections
+  in order Trending Events → Today at a Glance → Latest Events → External Company Rankings →
+  Explore; 12 hero cards (4 per domain): 10 AI summaries, 1 Gematsu excerpt (Satisfactory), 1
+  card without a summary (新浪财经, headline only); no empty card, no raw AI state text; headline
+  → `/event/<id>` (What Happened, Why It Matters, Timeline); Search entry 比特币 →
+  `/search?q=比特币` → Bitcoin `42d6184f`; English and 简体中文 at 1024 px (3 columns) and 375 px
+  (hero at ≈ 265 px), no horizontal overflow; AI text keeps its own `lang`; `/trending?domain=
+  finance` shows 20 cards, 30 expanded with 东方财富 · 网友点击排行榜 #1–#3…; console errors 0; the
+  browser contacted only `localhost:3070`/`8070` (aborted `_rsc` entries are Next.js link
+  prefetches); the API log shows only GET; `ai_artifacts` unchanged by the browser run.
+- After: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health` 30/30 healthy.
+
+### Known limitations
+
+- Most Trending Events are headline-only reports (Hacker News, 新浪财经, 3DM, 东方财富 list rows),
+  so their AI Summary mostly restates the headline and Why It Matters abstains; the summary adds
+  context only where a report has an excerpt.
+- Bounded selection favours current Trending Events, which are single-source today; multi-source
+  Events get AI only when they are among a domain's Trending or most recent Events.
+- Two audited artifacts carry minor framing notes (see above); new scheduled batches are not
+  reviewed automatically — read them with `GET /api/v1/events/{id}/ai` and hide a defective one
+  with `ai-artifact-reject` as before.
+- 东方财富 网友点击排行榜 states no period and no click counts; none is shown. It lives on a column
+  page (`/a/crdsm.html`); a layout change raises (source failure, previous snapshot kept).
+- Deferred sources: HN beststories, TapTap (entity lists, robots-disallowed data API), IGN
+  (publisher prohibition), Kotaku (no popularity section).
+- Production systemd still runs `--skip-ai` (nothing deployed; a deployment decision).
+- The Trending-1 Gematsu duplicate (post 1081377) remains until a reviewed `event-merge`.
+
+### Next step
+
+Owner review of the first scheduled bounded-AI run (2026-10-01 10:00 Australia/Sydney:
+`daily-update.log`, `update_runs` AI counts, `source-health`), and of the two noted artifacts.

@@ -435,7 +435,9 @@ def test_trending_api_is_event_centric(db, registry):
     gaming = body["domains"][0]
     assert gaming["total"] == 3 and len(gaming["items"]) == 1
     card = gaming["items"][0]
-    assert set(card) == {"event", "external_rankings", "topics"}
+    assert set(card) == {"event", "external_rankings", "topics", "summary"}
+    # Product-1: the listed articles carry no excerpt and no AI exists, so there is no summary.
+    assert card["summary"] is None
     assert set(card["external_rankings"][0]) >= {"source", "list_name", "rank", "observed_at"}
     assert [row["domain"] for row in everything["domains"]] == ["computer", "finance", "gaming"]
     assert not keys_of(body) & FORBIDDEN

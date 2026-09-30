@@ -276,7 +276,7 @@ def test_run_records_history_attempts_and_health(db, factory, settings, registry
     assert recording["run_recorded"] and recording["attempts_recorded"] == 3
     row = db.scalar(select(UpdateRun).where(UpdateRun.run_id == "ops-1"))
     assert (row.status, row.exit_code) == ("degraded", 3) and row.finished_at is not None
-    assert row.options == {"sources": sorted(KEYS), "skip_ai": True, "ai_limit": 10}
+    assert row.options == {"sources": sorted(KEYS), "skip_ai": True, "ai_limit": 12}
     content = next(s for s in row.stage_summary["stages"] if s["name"] == "content")
     assert content["failed_sources"] == ["ops_news"]
     news = attempts(db, "ops_news")[-1]

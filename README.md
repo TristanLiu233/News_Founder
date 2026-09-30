@@ -140,7 +140,7 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 
 | Route | Purpose | Default size |
 | --- | --- | --- |
-| `/` | Dashboard composed from existing APIs: Today at a Glance (latest reports per domain), Latest Events (backend recency order), Trending Events per domain (publisher ranks as published; never a cross-domain ranking), and live External Company Rankings shown as published; no Home score or AI | 3 reports per domain, 5 Events, Top 5 per domain, Top 5 per ranking |
+| `/` | Event-first dashboard (Product-1) composed from existing APIs: Trending Events per domain first (publisher ranks as published; each card with one persisted summary — the Event's AI Summary, else a publisher excerpt, else none), then Today at a Glance, Latest Events, live External Company Rankings shown as published, and Explore (Companies, Search); no Home score, and nothing is generated on a page load | 4 Events per domain, 3 reports per domain, 5 Events, Top 5 per ranking |
 | `/today` | Discover · Today: source-native content, one domain tab at a time. Every domain shows Latest News first (its `news`/`feed` sources from `/api/v1/sources`, read through `/api/v1/news`); Computer and Gaming then show their source rankings, Finance shows Market Pulse in a collapsed secondary section | 5 per source, View More |
 | `/trending` | Discover · Trending (Trending-1): Event cards for the domain's publisher ranked article lists; each card shows the headline (→ Event Detail), every publisher rank exactly as published (e.g. "Gematsu · Popular Posts #2"), time, report/source counts, and Topics; lists shown with their stated window and observation time; no platform score or position | 20 events, expandable to 50 |
 | `/search` | Discover · Search: multilingual topic (Subject) search with a query and domain tabs; type, source (`searchable` keys from `/api/v1/sources`), and language are under More filters; no search-mode control (the backend default is used) | 20 per page |
@@ -820,14 +820,15 @@ python -m industry_intelligence.cli source-health --json
 
 Status (2026-09-30): **enabled and verified** on the development Mac. A macOS launchd agent runs
 the one scheduler command daily at 10:00 Australia/Sydney (moved from the initial 08:00 on
-2026-09-30). Scheduled AI is off.
+2026-09-30). Since Product-1 the run includes bounded AI (`--ai-limit 12`).
 
 - **Mechanism:** a per-user launchd agent (`~/Library/LaunchAgents/local.industry-intelligence.daily-update.plist`,
   generated from `ops/scheduler/local.industry-intelligence.daily-update.plist.template`).
   launchd is the native scheduler on macOS; cron is legacy there, and Docker, GitHub Actions, and
   systemd are not part of this host.
 - **Command:** launchd starts `.venv/bin/python ops/scheduler/daily_update.py`, which runs exactly
-  `python -m industry_intelligence.cli intelligence-update --skip-ai` from `backend/` with a
+  `python -m industry_intelligence.cli intelligence-update --ai-limit 12` (Product-1; it ran
+  `--skip-ai` before, which stays the rollback) from `backend/` with a
   minimal environment (`PATH`, `HOME`, `LANG`, `PYTHONUNBUFFERED`). Configuration comes only from
   the root `.env` through `Settings`; no secret is copied into the plist or the wrapper. The
   Operations-2 lock, precheck, postcheck, `update_runs`, and `source_attempts` stay
@@ -878,7 +879,7 @@ Running the wrapper by hand (without `--plan`) performs a real update.
 ## Local-1 — Local runtime (native PostgreSQL 16)
 
 Status (2026-09-30): the local database runs natively; **daily local operation does not require
-Docker Desktop**. The launchd update (10:00 Australia/Sydney, `--skip-ai`) reads `DATABASE_URL`
+Docker Desktop**. The launchd update (10:00 Australia/Sydney, `--skip-ai` at the time; bounded AI `--ai-limit 12` since Product-1) reads `DATABASE_URL`
 from the root `.env` and was verified with Docker fully quit. Production packaging is unchanged:
 Docker Compose stays the planned production mechanism (Deployment-2A), so local and production
 database runtimes are intentionally different.
@@ -1046,6 +1047,7 @@ ranked list of articles:
 | Key | Publisher · list | Evidence kept |
 | --- | --- | --- |
 | `sina_finance_hot` | 新浪财经 · 热门新闻排行 · 新闻榜 · 点击量排行 | row order, clicks, daily window (Beijing date) |
+| `eastmoney_click_rank` | 东方财富 · 网友点击排行榜 (Product-1) | the printed position 1–10; no period or click counts are published, so none is shown |
 | `gematsu_popular` | Gematsu · Popular Posts | publisher order |
 | `game_3dm_hot` | 3DM · 近期热门 | publisher order |
 | `hacker_news_top` | Hacker News · Top Stories | HN position, points |
@@ -1074,3 +1076,34 @@ publisher ranked list → ContentItem (same Source as the publisher's feed)
   `python -m industry_intelligence.cli ingest-content gematsu_popular`.
 
 The implementation record, decisions, and live verification are in `DEVELOPMENT.md`.
+
+## Product-1 — Event-first Home, one more native list, bounded daily AI
+
+- **Home answers "what is happening now" first.** The first section is Trending Events (4 per
+  domain, from the same read model as `/trending`). Each card shows at most one short summary:
+  the Event's AI Summary when a valid, current one exists (labelled "AI summary"), otherwise a
+  publisher excerpt stored with one of its reports (labelled "Excerpt · <source>"), otherwise no
+  summary line. Failed, rejected, or outdated AI text is never shown. Today at a Glance, Latest
+  Events, External Company Rankings, and an Explore row (Companies, Search) follow.
+- **Page loads never generate anything.** Every GET request reads persisted data; no page calls
+  an AI provider, a crawler, or the update.
+- **东方财富 网友点击排行榜** is a fifth publisher ranked list (Finance), stored exactly as printed
+  (rank 1–10, the publisher's own name and basis). Audited and deferred: Hacker News
+  `beststories` (same publisher and kind as Top Stories), TapTap charts (game rankings, not news;
+  data behind a robots-disallowed API), IGN (automated retrieval prohibited), Kotaku (no
+  popularity section).
+- **Daily AI is bounded.** `intelligence-update --ai-limit N` accepts 1–15 Events (default 12);
+  anything else is refused. The Events are chosen deterministically (each domain's current
+  Trending Events, then its most recent ones, domains in turn), cached artifacts are reused
+  without a request, the provider credential is checked without generating before the first
+  request, and a refused credential stops the batch. The local launchd job runs
+  `intelligence-update --ai-limit 12` (at most 24 requests); `--skip-ai` turns AI off.
+
+```bash
+cd backend
+python -m industry_intelligence.cli intelligence-update --plan --ai-limit 12
+python -m industry_intelligence.cli ingest-content eastmoney_click_rank
+```
+
+The implementation record, source audit, 10-Event live AI audit, and verification are in
+`DEVELOPMENT.md`.

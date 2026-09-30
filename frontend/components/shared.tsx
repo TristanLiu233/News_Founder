@@ -28,13 +28,18 @@ export function TrendBadge({ trend, change, locale }: { trend: Trend | null; cha
 /**
  * One Trending Event (Trending and Home): headline → Event Detail, then every publisher's own rank
  * for its reports exactly as published (never combined or compared), time, coverage, and Topics as
- * context. There is deliberately no platform position number.
+ * context. There is deliberately no platform position number. `showSummary` (Home) adds the persisted
+ * summary, labelled as AI-generated or as a publisher excerpt; a card without one simply has no summary.
  */
-export function TrendingEventCard({ item, locale, compact = false }: { item: TrendingEventItem; locale: Locale; compact?: boolean }) {
+export function TrendingEventCard({ item, locale, compact = false, showSummary = false }: { item: TrendingEventItem; locale: Locale; compact?: boolean; showSummary?: boolean }) {
   const t = common[locale];
-  const { event } = item;
+  const { event, summary } = item;
   return <li className="trending-event">
     <Link className="event-title" href={`/event/${event.id}`} lang={event.title_language}>{event.canonical_title}</Link>
+    {showSummary && summary && <p className="event-summary">
+      <span className="summary-tag">{summary.kind === "ai_summary" ? t.aiSummaryTag : t.excerptTag(summary.source)}</span>{" "}
+      <span lang={summary.kind === "ai_summary" ? summary.locale : summary.language}>{summary.text}</span>
+    </p>}
     <ul className="rank-evidence" aria-label={t.publisherRanks}>
       {item.external_rankings.map(ranking => <li key={`${ranking.source_key}:${ranking.content_item_id}`}>
         <span>{ranking.source} · {ranking.list_name}</span> <strong className="native-rank"><span className="visually-hidden">{t.rankWord} </span>#{ranking.rank}</strong>

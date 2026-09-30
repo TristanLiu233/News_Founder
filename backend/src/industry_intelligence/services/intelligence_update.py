@@ -20,10 +20,14 @@ transaction boundary, so a failure never rolls back work an earlier stage commit
 7. ``events``: incremental ``build_events`` and ``relink_all_events`` in one transaction. Events
    are only created or joined: nothing is rebuilt, retired, or merged, so every Event permalink
    keeps resolving (``event-rebuild`` stays manual).
-8. ``ai``: optional; ``enrich_events`` over the most recent Events, generating only missing,
+8. ``ai``: optional and bounded (Product-1): ``--ai-limit`` Events (default 12, hard cap 15,
+   validated in code) chosen deterministically by ``ai_enrichment.select_bounded_events``
+   (current Trending Events, then the most recent ones, round-robin across domains). The plan is
+   computed first; only when a task needs generating is the provider preflighted (zero-generation
+   Models API check) before any Messages request. ``enrich_events`` then generates only missing,
    stale, or transiently failed artifacts (valid artifacts replay, reviewer rejections and
-   non-transient failures are left for an operator). Primary locale only (AI-LP1): at most two
-   tasks (Summary, Why It Matters) and so two provider requests per Event.
+   non-transient failures are left for an operator) and stops at the first refused credential.
+   Primary locale only (AI-LP1): at most two tasks and so two provider requests per Event.
 9. ``postcheck``: ``data-quality-audit`` again (read-only).
 
 Source failures are isolated per source. A failed ``links`` stage skips ``events`` and ``ai``;
@@ -44,6 +48,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,7 +81,8 @@ SUCCESS, DEGRADED, FAILED, SKIPPED = "success", "degraded", "failed", "skipped"
 ALREADY_RUNNING = "already_running"
 # 2 is argparse's usage error; 4 means another run holds the lock and nothing was done.
 EXIT_CODES = {SUCCESS: 0, FAILED: 1, DEGRADED: 3, ALREADY_RUNNING: 4}
-DEFAULT_AI_LIMIT = 10
+# Product-1: the bounded AI stage's Event cap (see ``ai_enrichment.validate_max_events``).
+DEFAULT_AI_LIMIT = 12
 ALEMBIC_INI = Path(__file__).resolve().parents[3] / "alembic.ini"
 
 
@@ -89,6 +95,8 @@ class StageResult:
     errors: list = field(default_factory=list)
     reason: str | None = None
     duration_ms: int = 0
+    # Per-item plan rows (the AI stage's selected Events); output only, never recorded.
+    details: list = field(default_factory=list)
 
 
 @dataclass
@@ -110,6 +118,14 @@ class UpdateResult:
 
     def to_dict(self):
         return asdict(self)
+
+
+def _check_ai_limit(ai_limit):
+    """Refuse an out-of-range AI Event cap before any lock, request, or write."""
+
+    from industry_intelligence.services.ai_enrichment import validate_max_events
+
+    return validate_max_events(ai_limit)
 
 
 def new_run_id(now=None):
@@ -453,21 +469,42 @@ def events_stage(session_factory):
 
 
 async def ai_stage(settings, session_factory, limit, provider=None, dry_run=False):
-    from industry_intelligence.services.ai_enrichment import enrich_events
+    from industry_intelligence.ai.provider import AIProviderError, preflight
+    from industry_intelligence.ai.providers import build_provider
+    from industry_intelligence.services.ai_enrichment import (
+        SELECTION_RULE,
+        enrich_events,
+        select_bounded_events,
+        validate_max_events,
+    )
 
     stage = StageResult("ai")
+    limit = validate_max_events(limit)
     if provider is None and not settings.ai_configured:
         stage.status, stage.reason = SKIPPED, "provider_not_configured"
         return stage
     try:
-        result = await enrich_events(
-            settings,
-            session_factory,
-            limit=limit,
-            provider=provider,
-            dry_run=dry_run,
-            skip_settled=True,
-        )
+        with session_factory() as session:
+            event_ids = select_bounded_events(session, limit)
+        stage.counts = {"max_events": limit, "selection": SELECTION_RULE}
+        if not event_ids:
+            stage.status, stage.reason = SKIPPED, "no_eligible_events"
+            return stage
+        if not dry_run and provider is None:
+            provider = build_provider(settings)  # builds a client; sends nothing
+        options = {"event_ids": event_ids, "provider": provider, "skip_settled": True}
+        planned = await enrich_events(settings, session_factory, dry_run=True, **options)
+        result = planned
+        if not dry_run:
+            if planned["would_generate"]:
+                await preflight(provider)
+            result = await enrich_events(settings, session_factory, **options)
+    except AIProviderError as exc:
+        stage.status, stage.reason = FAILED, "provider_preflight_failed"
+        stage.counts.update(requests=0)
+        stage.errors.append({"error": exc.code})
+        logger.warning("stage=ai event=preflight_failed error=%s", exc.code)
+        return stage
     except Exception as exc:
         stage.status, stage.reason = FAILED, "provider_error"
         stage.errors.append({"error": type(exc).__name__})
@@ -482,16 +519,27 @@ async def ai_stage(settings, session_factory, limit, provider=None, dry_run=Fals
         "skipped_failed",
         "skipped_no_primary_locale",
     )
-    stage.counts = {"events": len(result["events"]), **{key: result[key] for key in keys}}
+    domains = Counter(row["domain"] for row in planned["events"])
+    stage.counts.update(
+        selected_events=len(event_ids),
+        selected_by_domain=", ".join(f"{d} {domains[d]}" for d in sorted(domains)),
+        **{key: result[key] for key in keys},
+    )
+    stage.details = planned["events"]
     if not dry_run:
+        errors = result["errors"]
         stage.counts.update(
             requests=result["requests"],
             generated=result["generated"],
             failed=result["failed"],
+            validation_failed=errors.get("validation_failed", 0),
             stale_marked=result["stale_marked"],
+            not_attempted=result["not_attempted"],
         )
-        stage.errors = [{"error": code, "count": n} for code, n in result["errors"].items()]
-        if result["failed"]:
+        stage.errors = [{"error": code, "count": n} for code, n in errors.items()]
+        if result["aborted"]:
+            stage.status, stage.reason = FAILED, result["aborted"]
+        elif result["failed"]:
             stage.status, stage.reason = DEGRADED, "generation_failures"
     return stage
 
@@ -556,6 +604,7 @@ async def run_update(
     This is the lock-free core; ``execute_update`` wraps it with the global lock and the run
     history (``recorder``)."""
 
+    _check_ai_limit(ai_limit)
     run_id = run_id or new_run_id()
     started_at = started_at or datetime.now(UTC)
     result = UpdateResult(run_id=run_id, started_at=started_at.isoformat())
@@ -654,6 +703,7 @@ async def execute_update(
 
     from industry_intelligence.services.update_operations import RunRecorder, UpdateLock
 
+    _check_ai_limit(ai_limit)
     run_id = run_id or new_run_id()
     started_at = datetime.now(UTC)
     lock = lock or UpdateLock(settings.database_url)
@@ -743,6 +793,7 @@ async def plan_update(
     from industry_intelligence.services.content_ingestion import relink_all_content
     from industry_intelligence.services.update_operations import lock_state
 
+    _check_ai_limit(ai_limit)
     ranking_keys, company_keys, content_keys = select_sources(sources)
     precheck = check_state(session_factory, settings, check, audit)
     plan = {
@@ -791,6 +842,7 @@ async def plan_update(
         ai = await ai_stage(settings, session_factory, ai_limit, dry_run=True)
         status = "planned" if ai.status == SUCCESS else ai.status
         plan["stages"][6].update(status=status, reason=ai.reason, **ai.counts)
+        plan["stages"][6]["selected_events"] = ai.details
     return plan
 
 
@@ -816,6 +868,11 @@ def render_text(result):
         lines.append(f"{head} [{stage.duration_ms} ms]")
         if stage.counts:
             lines.append(f"  {_counts(stage.counts)}")
+        for row in stage.details:
+            lines.append(
+                f"  event {row['event_id']} {row['domain']} sources {row['source_count']} "
+                f"locale {row['primary_locale']}: {_counts(row['tasks']) or 'no tasks'}"
+            )
         for row in stage.sources:
             if "error" in row:
                 status = f" {row['status_code']}" if "status_code" in row else ""

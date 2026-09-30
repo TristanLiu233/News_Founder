@@ -152,6 +152,84 @@ class SinaFinanceHotAdapter(NewsRankingAdapter):
         return entries
 
 
+# --- 东方财富 网友点击排行榜 (Product-1) ---------------------------------------------------------
+
+EASTMONEY_ARTICLE = re.compile(r"^https?://finance\.eastmoney\.com/a/(\d+)\.html$")
+EASTMONEY_TIME = re.compile(r"(\d{4})年(\d{2})月(\d{2})日\s*(\d{2}):(\d{2})")
+
+
+def parse_eastmoney_click_rank(html, observed_at):
+    """The ``网友点击排行榜`` (reader click ranking) block, rows in the publisher's own numbering.
+
+    ``rank`` is the number the publisher prints next to each row (``span.no``), not a position
+    counted here; a row without a valid number, a foreign link, or a title is dropped and the
+    others keep their numbers. The article code in the URL is the publisher's stable ID (the
+    same code its 7×24 feed rows carry). The block states no period and no click counts, so
+    neither is recorded. Other blocks on the page (dated editorial 专题, columns) are not read.
+    """
+
+    soup = BeautifulSoup(html, "html.parser")
+    heading = next((h2 for h2 in soup.find_all("h2") if "网友点击排行榜" in h2.get_text()), None)
+    block = heading.find_next("ul") if heading else None
+    if block is None or not block.find_all("li"):
+        raise ValueError("东方财富 网友点击排行榜 block not found")
+    entries, failed = [], 0
+    for row in block.find_all("li"):
+        number = row.select_one("span.no")
+        link = row.find("a", href=True)
+        text = number.get_text(strip=True) if number else ""
+        match = EASTMONEY_ARTICLE.match(link["href"]) if link else None
+        title = _clean(link.get_text(" ", strip=True)) if link else ""
+        if not text.isdigit() or int(text) < 1 or not match or not title:
+            failed += 1
+            continue
+        entries.append(
+            RankedContentItem(
+                rank=int(text),
+                item=ContentSourceItem(
+                    match.group(1), title, link["href"], None, observed_at, "zh-CN"
+                ),
+            )
+        )
+    return entries, failed
+
+
+def parse_eastmoney_published(html):
+    """The article page's publication time (``div.infos``, Beijing time), else None."""
+
+    soup = BeautifulSoup(html, "html.parser")
+    infos = soup.select_one("div.infos")
+    match = EASTMONEY_TIME.search(infos.get_text(" ", strip=True)) if infos else None
+    if not match:
+        return None
+    year, month, day, hour, minute = (int(value) for value in match.groups())
+    try:
+        local = datetime(year, month, day, hour, minute, tzinfo=BEIJING)
+    except ValueError:
+        return None
+    return local.astimezone(UTC)
+
+
+class EastmoneyClickRankAdapter(NewsRankingAdapter):
+    source_name = "东方财富"
+    domain = Domain.FINANCE
+    language = "zh-CN"
+    # The 热点扫描 column page, which carries the site's 网友点击排行榜 block.
+    page_url = "https://finance.eastmoney.com/a/crdsm.html"
+    lookup_delay = 1.0
+    lookup_articles = True
+
+    async def fetch(self):
+        observed_at = datetime.now(UTC)
+        response = await self.http.get(self.page_url)
+        entries, self.failed_count = parse_eastmoney_click_rank(response.text, observed_at)
+        return entries[: self.limit]
+
+    async def article_details(self, url):
+        # The article code is already the row's external ID; the page only adds the time.
+        return ArticleDetails(parse_eastmoney_published((await self.http.get(url)).text))
+
+
 # --- Gematsu Popular Posts --------------------------------------------------------------------
 
 

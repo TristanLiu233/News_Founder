@@ -52,6 +52,13 @@ class AIRequestRejected(AIProviderError):
     code = "request_rejected"
 
 
+class AIAuthenticationFailed(AIRequestRejected):
+    """401/403: the credential was refused. Stored like any rejection (``request_rejected``), but
+    a batch stops at the first one instead of sending more requests with the same credential."""
+
+    authentication = True
+
+
 class AIRefused(AIProviderError):
     """The model declined the request."""
 
@@ -85,6 +92,19 @@ class AIProvider(Protocol):
 
 
 MAX_RETRY_DELAY = 60.0
+
+
+async def preflight(provider):
+    """Zero-generation check that the credential and model are accepted, before a batch.
+
+    Adapters may define ``preflight()`` (Anthropic: a Models API lookup, no Messages request);
+    a provider without one passes. Raises an ``AIProviderError`` (``AIAuthenticationFailed`` for a
+    refused credential); never retried here.
+    """
+
+    check = getattr(provider, "preflight", None)
+    if check is not None:
+        await check()
 
 
 async def generate_with_retry(provider, *, max_retries, base_delay=2.0, sleep=None, **request):

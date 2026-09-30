@@ -75,8 +75,17 @@ export interface TrendingList {
   source_key: string; source: string; list_key: string; list_name: string; ranking_kind: string;
   window: string | null; observed_at: string; entry_count: number; pending_event_count: number;
 }
+/**
+ * One short persisted summary of an Event (Product-1): the first point of its displayable AI Summary
+ * (valid, current, primary locale), else a publisher excerpt stored with one of its reports; null
+ * when neither exists. Never generated on a request.
+ */
+export type EventCardSummary =
+  | {kind: "ai_summary"; text: string; locale: string; artifact_id: string; model: string; prompt_version: string; generated_at: string}
+  | {kind: "excerpt"; text: string; language: string; source: string; content_item_id: string};
 export interface TrendingEventItem {
   event: EventSummary; external_rankings: ExternalRanking[]; topics: EventSubjectRef[];
+  summary: EventCardSummary | null;
 }
 export interface TrendingDomain {
   domain: Domain; status: "ready" | "unavailable"; ordering: string;

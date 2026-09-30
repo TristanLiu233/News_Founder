@@ -48,6 +48,8 @@ export const common = {
     /** The publisher's own daily list (e.g. Sina `top_type=day`) for a Beijing calendar date; never a rolling 24 h window. */
     dailyList: (date: string) => `daily list, Beijing date ${date}`,
     companyTag: "Company",
+    aiSummaryTag: "AI summary",
+    excerptTag: (source: string) => `Excerpt · ${source}`,
   },
   "zh-CN": {
     brand: "行业情报",
@@ -86,6 +88,8 @@ export const common = {
     relatedTopics: "相关主题",
     dailyList: (date: string) => `日榜，北京时间 ${date}`,
     companyTag: "公司",
+    aiSummaryTag: "AI 摘要",
+    excerptTag: (source: string) => `摘录 · ${source}`,
   },
 } as const;
 

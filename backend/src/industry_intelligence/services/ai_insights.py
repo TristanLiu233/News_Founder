@@ -147,3 +147,53 @@ def event_ai(session, event_id, locale=None):
         },
         "insights": insights,
     }
+
+
+SUMMARY_TYPE = "event_summary"
+
+
+def available_summaries(session, event_ids):
+    """Per canonical Event, the first point of its displayable AI Summary; nothing else.
+
+    Exactly the ``available`` state of ``event_ai``: a ``valid`` primary-locale artifact of the
+    current primary prompt built from the Event's current evidence. Stale, failed, rejected, and
+    legacy cross-language artifacts are never returned, and an ``insufficient_evidence`` answer
+    without points gives nothing. Persisted data only; no provider is built or called.
+    """
+
+    spec = INSIGHT_PROMPTS[SUMMARY_TYPE]
+    keys = [str(event_id) for event_id in event_ids]
+    if not keys:
+        return {}
+    by_event = {}
+    for artifact in session.scalars(
+        select(AIArtifact).where(
+            AIArtifact.entity_type == ENTITY_EVENT,
+            AIArtifact.entity_key.in_(keys),
+            AIArtifact.artifact_type == SUMMARY_TYPE,
+        )
+    ):
+        by_event.setdefault(artifact.entity_key, []).append(artifact)
+    output = {}
+    for event_id in event_ids:
+        artifacts = by_event.get(str(event_id))
+        if not artifacts:
+            continue
+        evidence = load_event_evidence(session, event_id)
+        primary = primary_locale(evidence) if evidence is not None else None
+        if primary is None:
+            continue
+        insight = _insight(spec, evidence, [a for a in artifacts if a.locale == primary], primary)
+        artifact = insight["artifact"]
+        if insight["state"] != "available" or not artifact["points"]:
+            continue
+        output[event_id] = {
+            "kind": "ai_summary",
+            "text": artifact["points"][0]["text"],
+            "locale": artifact["locale"],
+            "artifact_id": artifact["id"],
+            "model": artifact["model"],
+            "prompt_version": artifact["prompt_version"],
+            "generated_at": artifact["generated_at"],
+        }
+    return output

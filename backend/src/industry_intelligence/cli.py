@@ -15,6 +15,7 @@ from industry_intelligence.config import get_settings
 from industry_intelligence.db.session import create_database_engine, create_session_factory
 from industry_intelligence.domain.enums import Domain
 from industry_intelligence.logging import configure_logging
+from industry_intelligence.services.ai_enrichment import DEFAULT_MAX_EVENTS
 from industry_intelligence.services.ranking import rank_domain
 from industry_intelligence.services.resolution import backfill_subject_identities
 from industry_intelligence.services.source_ingestion import ingest, ingest_all_enabled_sources
@@ -28,6 +29,17 @@ def _aware_datetime(value):
     if parsed.tzinfo is None:
         raise argparse.ArgumentTypeError("needs a timezone offset, e.g. 2026-09-27T00:00Z")
     return parsed
+
+
+def _ai_event_cap(value):
+    """``--ai-limit``: the bounded AI stage's Event cap (1..15); anything else is a usage error."""
+
+    from industry_intelligence.services.ai_enrichment import validate_max_events
+
+    try:
+        return validate_max_events(int(value))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _without_ids(result):
@@ -66,7 +78,8 @@ def main():
         choices=[*SOURCES, *COMPANY_RANKINGS, *CONTENT_SOURCES, *NEWS_RANKINGS],
     )
     intelligence.add_argument("--skip-ai", action="store_true")
-    intelligence.add_argument("--ai-limit", type=int, default=10)
+    # Bounded AI (Product-1): at most this many Events per run (default 12, allowed 1..15).
+    intelligence.add_argument("--ai-limit", type=_ai_event_cap, default=DEFAULT_MAX_EVENTS)
     intelligence.add_argument("--run-id")
     intelligence.add_argument("--json", action="store_true")
     rank = sub.add_parser("rank")

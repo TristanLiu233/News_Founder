@@ -254,3 +254,73 @@ def test_non_transient_errors_are_not_retried(error):
     raised, delays, calls = run_retry(responder)
     assert isinstance(raised, error)
     assert len(calls) == 1 and delays == []
+
+
+# --- Product-1: refused credentials and the zero-generation preflight ------------------------
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_refused_credentials_are_authentication_failures_and_never_retried(status):
+    from industry_intelligence.ai.provider import AIAuthenticationFailed
+
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx2.Response(
+            status, json={"type": "error", "error": {"type": "auth", "message": "m"}}
+        )
+
+    provider = adapter(handler)
+    with pytest.raises(AIAuthenticationFailed) as caught:
+        asyncio.run(
+            generate_with_retry(
+                provider,
+                max_retries=3,
+                sleep=lambda _s: asyncio.sleep(0),
+                system="s",
+                user="u",
+                schema={"type": "object"},
+                schema_name="x",
+            )
+        )
+    # Stored like any rejection, but flagged so a batch stops; one request only.
+    assert caught.value.code == "request_rejected" and caught.value.authentication
+    assert calls == ["/v1/messages"]
+
+
+def test_preflight_checks_the_model_without_a_messages_request():
+    from industry_intelligence.ai.provider import AIAuthenticationFailed, preflight
+
+    seen = []
+
+    def ok(request):
+        seen.append((request.method, request.url.path))
+        return httpx2.Response(
+            200,
+            json={
+                "type": "model",
+                "id": "test-model",
+                "display_name": "Test",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        )
+
+    asyncio.run(preflight(adapter(ok)))
+    assert seen == [("GET", "/v1/models/test-model")]
+
+    def refused(request):
+        seen.append((request.method, request.url.path))
+        return httpx2.Response(
+            401, json={"type": "error", "error": {"type": "authentication_error", "message": "m"}}
+        )
+
+    with pytest.raises(AIAuthenticationFailed):
+        asyncio.run(preflight(adapter(refused)))
+    assert all(path != "/v1/messages" for _, path in seen)
+
+
+def test_providers_without_a_preflight_pass_it():
+    from industry_intelligence.ai.provider import preflight
+
+    asyncio.run(preflight(FixtureProvider(lambda **_: {})))

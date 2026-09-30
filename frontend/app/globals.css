@@ -313,3 +313,14 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .ranking-card > .info-note { margin: 0 0 .6rem; }
 .detail-meta > span:not(:last-child)::after, .event-meta > span:not(:last-child)::after { content: "·"; margin-left: .9rem; color: #a6afa6; }
 .ranking-card > .event-list:first-child { margin-top: 0; }
+
+/* Product-1: Event-first Home. The Trending hero cards carry one persisted summary (AI or excerpt). */
+.home-hero .home-section-head { margin-top: 1.5rem; }
+.home-hero .trending-event .event-title { font-size: 1.02rem; }
+.event-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin: .4rem 0 0; color: #3d443f; font-size: .88rem; line-height: 1.45; overflow-wrap: anywhere; }
+.summary-tag { padding: .05rem .35rem; border-radius: .3rem; background: #efede7; color: #5a605a; font-size: .7rem; font-weight: 700; white-space: nowrap; }
+.home-explore { grid-template-columns: minmax(0, 1fr); margin-top: .75rem; }
+@media (min-width: 42rem) { .home-explore { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.home-search { display: flex; gap: .5rem; margin-top: .6rem; }
+.home-search input { flex: 1; min-width: 0; padding: .6rem .7rem; border: 1px solid #a6afa6; border-radius: .4rem; }
+.home-search button { padding: .6rem 1.1rem; border: 0; border-radius: .4rem; background: #087f5b; color: white; }

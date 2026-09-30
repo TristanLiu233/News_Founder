@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 from industry_intelligence.ai.provider import (
+    AIAuthenticationFailed,
     AIMalformedOutput,
     AIProviderNotConfigured,
     AIRateLimited,
@@ -56,6 +57,24 @@ class AnthropicProvider:
             )
         self._client = client
 
+    async def preflight(self):
+        """Models API lookup of the configured model: authenticates without generating."""
+
+        import anthropic
+
+        try:
+            await self._client.models.retrieve(self.model)
+        except anthropic.APITimeoutError as exc:
+            raise AITimeout("request timed out") from exc
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+            raise AIAuthenticationFailed(f"HTTP {exc.status_code}") from exc
+        except anthropic.APIStatusError as exc:
+            if exc.status_code >= 500:
+                raise AIServerError(f"HTTP {exc.status_code}") from exc
+            raise AIRequestRejected(f"HTTP {exc.status_code}") from exc
+        except anthropic.APIConnectionError as exc:
+            raise AIServerError("connection error") from exc
+
     async def generate_structured(self, *, system, user, schema, schema_name):
         import anthropic
 
@@ -71,6 +90,8 @@ class AnthropicProvider:
             raise AITimeout("request timed out") from exc
         except anthropic.RateLimitError as exc:
             raise AIRateLimited("HTTP 429", _retry_after(exc.response)) from exc
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+            raise AIAuthenticationFailed(f"HTTP {exc.status_code}") from exc
         except anthropic.APIStatusError as exc:
             if exc.status_code >= 500:
                 raise AIServerError(f"HTTP {exc.status_code}") from exc

@@ -7,6 +7,7 @@ content publication times (``time_basis: content_publication``), not verified oc
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from uuid import UUID
 
@@ -44,6 +45,11 @@ LIST_ENTITY_PREVIEW = 3
 LIST_SOURCE_PREVIEW = 4
 DETAIL_CONTENT_PREVIEW = 5
 EFFECTIVE_AT = func.coalesce(ContentItem.published_at, ContentItem.observed_at)
+# Feed boilerplate after a stored excerpt ("… Read more", "[…]"); the excerpt text is not rewritten.
+EXCERPT_TRAILER = re.compile(
+    r"\s*(?:\[(?:…|\.\.\.)\]|read more|continue reading)[.…]?\s*$", re.IGNORECASE
+)
+MIN_EXCERPT_CHARS = 20
 
 
 def _iso(value):
@@ -337,3 +343,63 @@ def event_content(session, event_id, limit=10, offset=0, order="asc"):
         "offset": offset,
         "order": order,
     }
+
+
+def clean_excerpt(text, title=""):
+    """A stored publisher excerpt fit to show under its headline, or None.
+
+    Whitespace is collapsed and a trailing feed marker ("Read more", "[…]") is dropped; nothing
+    else is changed. Excerpts that are too short or only repeat the headline are not shown.
+    """
+
+    text = EXCERPT_TRAILER.sub("", " ".join((text or "").split())).strip()
+    if len(text) < MIN_EXCERPT_CHARS:
+        return None
+    headline = " ".join((title or "").split())
+    if text == headline or text in headline:
+        return None
+    return text
+
+
+def event_excerpts(session, event_ids):
+    """Per Event, the stored excerpt of one of its reports (never AI text, never generated).
+
+    The representative report is preferred; otherwise the first report in publication order
+    whose excerpt is fit to show (``clean_excerpt``). Events without one are absent.
+    """
+
+    if not event_ids:
+        return {}
+    representative = dict(
+        session.execute(
+            select(Event.id, Event.representative_content_id).where(Event.id.in_(event_ids))
+        ).all()
+    )
+    rows = session.execute(
+        select(EventContentLink.event_id, ContentItem, Source.name)
+        .join(ContentItem, ContentItem.id == EventContentLink.content_item_id)
+        .join(Source, Source.id == ContentItem.source_id)
+        .where(EventContentLink.event_id.in_(event_ids), ContentItem.description.is_not(None))
+        .order_by(EFFECTIVE_AT, Source.name, ContentItem.id)
+    ).all()
+    candidates = defaultdict(list)
+    for event_id, item, source in rows:
+        text = clean_excerpt(item.description, item.title)
+        if text is None:
+            continue
+        candidates[event_id].append(
+            {
+                "kind": "excerpt",
+                "text": text,
+                "language": item.language,
+                "source": source,
+                "content_item_id": str(item.id),
+            }
+        )
+    output = {}
+    for event_id, options in candidates.items():
+        preferred = str(representative.get(event_id))
+        output[event_id] = next(
+            (row for row in options if row["content_item_id"] == preferred), options[0]
+        )
+    return output
