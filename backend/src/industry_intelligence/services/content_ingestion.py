@@ -17,7 +17,7 @@ from uuid import UUID
 from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert
 
-from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES
+from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES, NEWS_RANKINGS
 from industry_intelligence.db.models import ContentItem, ContentSubjectLink, Source, Subject
 from industry_intelligence.db.models.canonical import SubjectAlias, SubjectExternalIdentity
 from industry_intelligence.db.models.search import SubjectRedirect
@@ -142,8 +142,7 @@ def link_content_items(session, content_ids):
     }
 
 
-def persist_content(session, definition, items, failed_count=0):
-    started = perf_counter()
+def _source_for(session, definition):
     source = session.scalar(select(Source).where(Source.name == definition.name))
     if source is None:
         source = Source(
@@ -155,8 +154,19 @@ def persist_content(session, definition, items, failed_count=0):
         )
         session.add(source)
         session.flush()
+    return source
+
+
+def store_content_items(session, definition, items):
+    """Insert new content rows; returns the stored ContentItem ID of every incoming item.
+
+    ``ids[i]`` is the new or already stored row of ``items[i]`` (None when the item is
+    invalid); existing rows are never modified.
+    """
+
+    source = _source_for(session, definition)
     invalid = replayed = 0
-    created_ids = []
+    ids, created_ids = [], []
     for incoming in items:
         title = " ".join(incoming.title.split())
         url = normalize_url(incoming.url)
@@ -167,11 +177,14 @@ def persist_content(session, definition, items, failed_count=0):
             or urlsplit(url).scheme not in {"http", "https"}
         ):
             invalid += 1
+            ids.append(None)
             continue
-        if session.scalar(
+        stored = session.scalar(
             select(ContentItem.id).where(ContentItem.source_id == source.id, ContentItem.url == url)
-        ):
+        )
+        if stored:
             replayed += 1
+            ids.append(stored)
             continue
         identity = f"external:{incoming.external_id}" if incoming.external_id else f"url:{url}"
         digest = hashlib.sha256(f"{title}\n{incoming.description or ''}".encode()).hexdigest()
@@ -197,19 +210,45 @@ def persist_content(session, definition, items, failed_count=0):
         )
         if created is None:
             replayed += 1
+            ids.append(
+                session.scalar(
+                    select(ContentItem.id).where(
+                        ContentItem.source_id == source.id, ContentItem.identity_key == identity
+                    )
+                )
+            )
             continue
+        ids.append(created)
         created_ids.append(created)
+    return {
+        "source": source,
+        "ids": ids,
+        "created_ids": created_ids,
+        "invalid": invalid,
+        "replayed": replayed,
+    }
+
+
+def link_new_content(session, created_ids):
+    """Deterministic links for new rows inside a SAVEPOINT; returns (result, error type)."""
+
+    if not created_ids:
+        return {"items": 0, "links": 0, "linked_subjects": 0}, None
+    try:
+        with session.begin_nested():
+            return link_content_items(session, created_ids), None
+    except Exception as exc:  # linking is isolated from the persisted content
+        return {"items": 0, "links": 0, "linked_subjects": 0}, type(exc).__name__
+
+
+def persist_content(session, definition, items, failed_count=0):
+    started = perf_counter()
+    stored = store_content_items(session, definition, items)
+    created_ids, invalid, replayed = stored["created_ids"], stored["invalid"], stored["replayed"]
     if items and not created_ids and invalid == len(items):
         raise ValueError("No valid content items")
     session.flush()
-    link_result = {"items": 0, "links": 0, "linked_subjects": 0}
-    link_error = None
-    if created_ids:
-        try:
-            with session.begin_nested():
-                link_result = link_content_items(session, created_ids)
-        except Exception as exc:  # linking is isolated from the persisted content
-            link_error = type(exc).__name__
+    link_result, link_error = link_new_content(session, created_ids)
     return {
         "source": definition.key,
         "domain": str(definition.domain),
@@ -244,10 +283,17 @@ async def ingest_content(key, settings, session_factory):
 
 
 async def ingest_all_content(settings, session_factory, keys=None):
+    """Every chronological feed, then every publisher's ranked article list (one snapshot)."""
+
+    from industry_intelligence.services.news_ranking_ingestion import ingest_news_ranking
+
     results = []
-    for key in keys or CONTENT_SOURCES:
+    for key in keys or [*CONTENT_SOURCES, *NEWS_RANKINGS]:
         try:
-            results.append(await ingest_content(key, settings, session_factory))
+            if key in NEWS_RANKINGS:
+                results.append(await ingest_news_ranking(key, settings, session_factory))
+            else:
+                results.append(await ingest_content(key, settings, session_factory))
         except Exception as exc:
             results.append({"source": key, "error": type(exc).__name__})
     return results

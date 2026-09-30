@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES
+from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES, NEWS_RANKINGS
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.db.models import RankObservation, Source, Subject
 from industry_intelligence.db.models.ingestion_batch import IngestionBatch
@@ -12,13 +12,17 @@ from industry_intelligence.domain.enums import Domain
 from industry_intelligence.services.news import list_news
 
 
-def current_snapshot(session, key):
-    batch = session.scalar(
+def current_snapshot_batch(session, key):
+    return session.scalar(
         select(IngestionBatch)
         .where(IngestionBatch.source_key == key)
         .order_by(IngestionBatch.observed_at.desc())
         .limit(1)
     )
+
+
+def current_snapshot(session, key):
+    batch = current_snapshot_batch(session, key)
     if batch is None:
         return None, []
     rows = session.execute(
@@ -54,7 +58,14 @@ def sources(session):
             )
         )
     for definition in CONTENT_SOURCES.values():
-        count = len(list_news(session, source=definition.name, limit=100))
+        count = len(
+            list_news(
+                session,
+                source=definition.name,
+                limit=100,
+                content_type=str(definition.content_type),
+            )
+        )
         output.append(
             dict(
                 key=definition.key,
@@ -65,6 +76,23 @@ def sources(session):
                 latest_observed_at=None,
                 latest_item_count=count,
                 content_type=str(definition.content_type),
+                searchable=False,
+            )
+        )
+    for definition in NEWS_RANKINGS.values():
+        # A publisher's ranked article list (read by Trending, never by Today or Search).
+        batch = current_snapshot_batch(session, definition.key)
+        output.append(
+            dict(
+                key=definition.key,
+                name=definition.name,
+                domain=definition.domain,
+                enabled=True,
+                configured=True,
+                latest_observed_at=batch.observed_at if batch else None,
+                latest_item_count=len(batch.result.get("entries", [])) if batch else 0,
+                content_type="news_ranking",
+                list_name=definition.list_name,
                 searchable=False,
             )
         )
@@ -116,7 +144,12 @@ def today(session):
                 "source": definition.name,
                 "content_type": str(definition.content_type),
                 "status": "ready",
-                "items": list_news(session, source=definition.name, limit=5),
+                "items": list_news(
+                    session,
+                    source=definition.name,
+                    limit=5,
+                    content_type=str(definition.content_type),
+                ),
             }
         )
     return dict(generated_at=datetime.now(UTC), domains=domains, finance_news=finance_news)

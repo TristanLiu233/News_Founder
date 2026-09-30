@@ -50,7 +50,8 @@ function NewsSourceCard({ feed, domain, locale }: { feed: NewsSource; domain: Do
     setLoading(true); setFailed(false);
     try {
       // Chronological pagination through the existing `/news` limit/offset API.
-      const page = await fetchNews({domain, source: feed.source, limit: NEWS_PAGE, offset: items.length});
+      // Only this card's feed (a publisher may also have ranked articles of another type).
+      const page = await fetchNews({domain, source: feed.source, content_type: feed.content_type, limit: NEWS_PAGE, offset: items.length});
       const known = new Set(items.map(item => item.id));
       setItems([...items, ...page.items.filter(item => !known.has(item.id))]);
       setExhausted(page.items.length < NEWS_PAGE);
@@ -74,8 +75,9 @@ function NewsSourceCard({ feed, domain, locale }: { feed: NewsSource; domain: Do
 async function loadDomainNews(domain: Domain, sources: SourceInfo[], signal: AbortSignal): Promise<NewsSource[]> {
   const feeds = sources.filter(source => source.domain === domain && (source.content_type === "news" || source.content_type === "feed"));
   return Promise.all(feeds.map(async source => {
-    const page = await fetchNews({domain, source: source.name, limit: PREVIEW}, signal);
-    return {source_key: source.key, source: source.name, content_type: source.content_type as NewsSource["content_type"], status: "ready", items: page.items};
+    const contentType = source.content_type as NewsSource["content_type"];
+    const page = await fetchNews({domain, source: source.name, content_type: contentType, limit: PREVIEW}, signal);
+    return {source_key: source.key, source: source.name, content_type: contentType, status: "ready", items: page.items};
   }));
 }
 

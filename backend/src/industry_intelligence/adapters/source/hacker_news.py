@@ -51,6 +51,8 @@ class HackerNewsAdapter:
                         "comments": data.get("descendants"),
                         "hn_url": hn_url,
                         "metric_label": "points",
+                        # Submission time (Unix seconds) as published by the API.
+                        "time": data.get("time"),
                     },
                 )
             except Exception as exc:

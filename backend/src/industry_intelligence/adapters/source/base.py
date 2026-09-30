@@ -68,3 +68,21 @@ class ContentSourceItem:
             raise ValueError("observed_at must be timezone-aware")
         if self.published_at is not None and self.published_at.tzinfo is None:
             raise ValueError("published_at must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class RankedContentItem:
+    """One article on a publisher's own ranked list (e.g. a click or popular-posts ranking).
+
+    ``rank`` is the publisher's position in that list, kept exactly; it is never derived from
+    a chronological feed. ``native_value`` is the publisher's own figure for the row (for
+    example a click count) as published, or None.
+    """
+
+    rank: int
+    item: ContentSourceItem
+    native_value: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.rank < 1:
+            raise ValueError("rank must be greater than zero")

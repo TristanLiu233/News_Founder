@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from industry_intelligence.adapters.source.content_registry import NEWS_RANKINGS
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.config import get_settings
 from industry_intelligence.db.models import (
@@ -25,7 +26,6 @@ from industry_intelligence.db.models import (
 from industry_intelligence.db.session import get_db_session
 from industry_intelligence.domain.enums import Domain, SubjectType
 from industry_intelligence.main import create_app
-from industry_intelligence.services.ranking import trending
 from industry_intelligence.services.resolution import merge_subjects, normalize_subject_name
 from industry_intelligence.services.subject_detail import rank_history, subject_detail
 
@@ -353,18 +353,6 @@ def test_related_news_empty_synthetic_original_url_and_pagination(db, world, cli
     assert first["items"][0]["linked_subjects"][0]["id"] == str(sid)
 
 
-def test_trending_limit_true_related_count_and_display_names(db, world):
-    make_news(db, world["english"], world["ranked"], 4)
-    domain = trending(db, "computer", limit=1)["domains"][0]
-    assert domain["total"] == 2 and len(domain["items"]) == 1
-    assert domain["items"][0]["display_names"] == {"en": "Test Game", "zh-CN": "测试游戏"}
-    assert domain["items"][0]["related_news_count"] == 0
-    assert domain["items"][0]["related_news_preview"] == []
-    item = trending(db, "computer")["domains"][0]["items"][1]
-    assert item["subject_id"] == world["ranked"].id
-    assert item["related_news_count"] == 4 and len(item["related_news_preview"]) == 3
-
-
 def test_subject_api_detail_history_and_not_found(db, world, client):
     sid = world["ranked"].id
     detail = client.get(f"/api/v1/subjects/{sid}").json()
@@ -382,9 +370,13 @@ def test_sources_searchable_keys_are_accepted_by_search(db, client):
     listed = client.get("/api/v1/sources").json()["sources"]
     searchable = [source for source in listed if source["searchable"]]
     assert {source["key"] for source in searchable} == set(SOURCES)
+    # Chronological feeds and publishers' ranked article lists are never Search sources.
     assert all(
-        source["content_type"] in {"news", "feed"} for source in listed if not source["searchable"]
+        source["content_type"] in {"news", "feed", "news_ranking"}
+        for source in listed
+        if not source["searchable"]
     )
+    assert {s["key"] for s in listed if s["content_type"] == "news_ranking"} == set(NEWS_RANKINGS)
     for source in searchable:
         response = client.get("/api/v1/search", params={"q": "zz", "source": source["key"]})
         assert response.status_code == 200, source["key"]

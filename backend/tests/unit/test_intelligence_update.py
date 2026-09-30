@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from industry_intelligence.adapters.company_ranking.registry import COMPANY_RANKINGS
-from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES
+from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES, NEWS_RANKINGS
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.config import Settings
 from industry_intelligence.services import intelligence_update as update
@@ -215,7 +215,8 @@ def test_error_detail_categories_carry_no_message():
 
 def test_default_sources_exclude_manual_only_rankings_and_explicit_keys_narrow():
     rankings, companies, content = update.select_sources()
-    assert rankings == list(SOURCES) and content == list(CONTENT_SOURCES)
+    # Chronological feeds, then the publishers' ranked article lists (both produce content).
+    assert rankings == list(SOURCES) and content == [*CONTENT_SOURCES, *NEWS_RANKINGS]
     assert companies == [key for key, d in COMPANY_RANKINGS.items() if d.daily_update]
     assert "wikipedia_largest_banks_assets" not in companies
     assert not COMPANY_RANKINGS["wikipedia_video_game_revenue"].daily_update
@@ -223,6 +224,11 @@ def test_default_sources_exclude_manual_only_rankings_and_explicit_keys_narrow()
         ["game_3dm"],
         ["wikipedia_video_game_revenue"],
         ["gematsu"],
+    )
+    assert update.select_sources(["gematsu_popular", "sina_finance_hot"]) == (
+        [],
+        [],
+        ["sina_finance_hot", "gematsu_popular"],
     )
 
 

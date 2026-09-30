@@ -42,7 +42,7 @@ CompositeRankingRun / CompositeRankingEntry
         ↓
 History, trend and source contribution breakdown
         ↓
-GET /api/v1/trending
+GET /api/v1/subjects/{id} (Cross-Source Rank; Trending is Event-centric, see below)
         ↓
 English / 简体中文 UI
 ```
@@ -62,7 +62,7 @@ Score(x)=\sum_s \frac{w_s}{k+r_{x,s}}e^{-\lambda t_s},
 
 Defaults are `k = 60`, a 24-hour half-life, and weight `1.0` for every rank list. Configuration is available through `RRF_K`, `FRESHNESS_HALF_LIFE`, and `RANK_LIST_WEIGHTS`. Duplicate appearances of one canonical subject in a rank list contribute only the best rank. Ties use score descending, source count descending, best source rank ascending, then stable subject ID. Language coverage is explanatory and never changes the score. Previous rank and trend also never affect the current score.
 
-Composite Ranking measures cross-platform attention based on rankings already produced by external platforms. It is not a quality score, investment rating, buy recommendation, prediction, or measure of company quality.
+Composite Ranking measures cross-platform attention based on rankings already produced by external platforms. It is not a quality score, investment rating, buy recommendation, prediction, or measure of company quality. Since Trending-1 it is shown only on Subject Detail ("Cross-Source Rank"); `/trending` is Event-centric and unscored (see the Trending-1 section).
 
 ## Setup and commands
 
@@ -129,8 +129,8 @@ python -m industry_intelligence.cli rank computer
 | GET | `/health/db` | PostgreSQL connectivity |
 | GET | `/api/v1/sources` | Source status and latest counts |
 | GET | `/api/v1/today` | Latest source-native lists |
-| GET | `/api/v1/trending` | Latest successful composite rankings |
-| GET | `/api/v1/trending?domain=gaming&limit=20` | One domain's composite ranking; optional `limit` (1–100), `total` reports the full size |
+| GET | `/api/v1/trending` | Events on publishers' own ranked article lists, per domain, with every native rank as evidence (no score) |
+| GET | `/api/v1/trending?domain=gaming&limit=20` | One domain; optional `limit` (1–100, default 20), `total` reports the number of Event cards |
 | GET | `/api/v1/subjects/{id}` | Canonical subject detail (redirect-aware) |
 | GET | `/api/v1/subjects/{id}/history?limit=30` | Composite rank history from successful runs |
 
@@ -140,9 +140,9 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 
 | Route | Purpose | Default size |
 | --- | --- | --- |
-| `/` | Dashboard composed from existing APIs: Today at a Glance (latest reports per domain), Latest Events (backend recency order), Trending Topics per domain (never a cross-domain ranking), and live External Company Rankings shown as published; no Home score or AI | 3 reports per domain, 5 Events, Top 5 per domain, Top 5 per ranking |
+| `/` | Dashboard composed from existing APIs: Today at a Glance (latest reports per domain), Latest Events (backend recency order), Trending Events per domain (publisher ranks as published; never a cross-domain ranking), and live External Company Rankings shown as published; no Home score or AI | 3 reports per domain, 5 Events, Top 5 per domain, Top 5 per ranking |
 | `/today` | Discover · Today: source-native content, one domain tab at a time. Every domain shows Latest News first (its `news`/`feed` sources from `/api/v1/sources`, read through `/api/v1/news`); Computer and Gaming then show their source rankings, Finance shows Market Pulse in a collapsed secondary section | 5 per source, View More |
-| `/trending` | Discover · Trending: cross-source composite attention per domain; rows show the topic, trend, type, and source count; score inputs are in a collapsed per-row Sources list and the RRF explanation in a collapsed Methodology note; Finance is labelled Market Pulse | Top 20, expandable to 50 |
+| `/trending` | Discover · Trending (Trending-1): Event cards for the domain's publisher ranked article lists; each card shows the headline (→ Event Detail), every publisher rank exactly as published (e.g. "Gematsu · Popular Posts #2"), time, report/source counts, and Topics; lists shown with their stated window and observation time; no platform score or position | 20 events, expandable to 50 |
 | `/search` | Discover · Search: multilingual topic (Subject) search with a query and domain tabs; type, source (`searchable` keys from `/api/v1/sources`), and language are under More filters; no search-mode control (the backend default is used) | 20 per page |
 | `/subject/{id}` | Topic (Subject) Detail: current rank and trend, related Events (hidden when none), rank history, where it appears (source lists), related news collapsed (the same reports are grouped under related Events), aliases, and a collapsed Methodology note (score, observations, link rules) | 20 lists, 10 news per page, 5 related Events |
 | `/rankings` | External company rankings per domain: ranking selector (only rankings with a collected snapshot; a direct link still opens a never-collected one), one-line publisher/metric/date/coverage/original-source meta and disclaimer, a collapsed About this ranking note (cadence, acquisition, observed time, source column and description), latest snapshot table with movement, dropped entries, company names linking to Company Detail, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
@@ -151,7 +151,7 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 | `/events` | Canonical Events grouped from existing news/feed items: domain and event-type filters, latest-report order, report and source counts, Subject/Company links (`?domain=&type=&subject_id=&company_id=&offset=`) | 20 per page, previous/next |
 | `/event/{id}` | Event Detail: headline with one meta line (domain, type, first report, report and source counts), labelled AI What Happened and Why It Matters (persisted, validated artifacts with per-point source links; a one-line state when one is unavailable, one combined line when both are), the timeline of reports linking to the original articles, related Topics and Companies (hidden when none), and a collapsed About this event note (time basis, reports by source and language, coverage ≠ importance, grouping, AI model/prompt/time) (redirect-aware) | 10 reports per page, View More |
 
-Header navigation is shared across pages: the brand links Home (`/`), and the primary links are Discover (`/today`; active on `/today`, `/trending`, and `/search`, which share Today | Trending | Search tabs that keep `?domain=`), Events, Rankings, and Companies. There is no `/discover` route. URLs are locale-independent; the locale stays in `localStorage`. Subject names in Trending and Search open the internal Subject Detail page; news titles and source titles open the original external URL in a new tab. Pages only read persisted data: no page load triggers ingestion, ranking, reindexing, embeddings, or LLM calls. The legacy `/?view=trending` and `/?view=today` URLs redirect to `/trending` and `/today`.
+Header navigation is shared across pages: the brand links Home (`/`), and the primary links are Discover (`/today`; active on `/today`, `/trending`, and `/search`, which share Today | Trending | Search tabs that keep `?domain=`), Events, Rankings, and Companies. There is no `/discover` route. URLs are locale-independent; the locale stays in `localStorage`. Trending headlines open Event Detail; Topic chips and Search results open the internal Subject Detail page; news titles and source titles open the original external URL in a new tab. Pages only read persisted data: no page load triggers ingestion, ranking, reindexing, embeddings, or LLM calls. The legacy `/?view=trending` and `/?view=today` URLs redirect to `/trending` and `/today`.
 
 Subject Detail resolves merged IDs through `subject_redirects` and returns the canonical subject; the page then replaces the URL with the canonical ID. The current rank comes only from the latest successful composite run for the subject's domain; a subject absent from it is shown as not currently ranked. Source appearances show the latest observation per rank list with appearance count, best rank, first-seen time and whether it is in the current snapshot. Related news reuses `/api/v1/news?subject_id=` and only shows deterministic links; an empty list is a normal state. Display names follow one shared alias rule in Search, Trending and Subject Detail.
 
@@ -224,8 +224,9 @@ SearchRRF(x)=\frac{w_l}{k+r_l(x)}+\frac{w_s}{k+r_s(x)}, \qquad k=60
 ```
 
 Exact canonical or alias matches are pinned ahead of other fused candidates. Search RRF and
-Trending RRF are separate contexts: Trending measures cross-source attention, while Search
-measures query relevance. Trending scores never affect search ordering.
+the composite (cross-source) RRF are separate contexts: the composite measures cross-source
+attention for Subject Detail, while Search measures query relevance. Neither affects the other,
+and Trending (Event-centric since Trending-1) has no score.
 
 Semantic search is optional at runtime. If no embedding endpoint and verified multilingual
 model are configured, `hybrid` and `semantic` requests fall back to lexical retrieval and the
@@ -282,13 +283,13 @@ Reuters was evaluated first, but its maintained newswire RSS delivery requires R
 
 `rank_lists.list_type` now distinguishes `ranking` and `market_pulse`. General `ContentItem` records use `news` or `feed`, retain original article URLs and publication times, and deduplicate by `(source_id, external_id)` or normalized URL. `ContentSubjectLink` supports conservative many-to-many deterministic associations. Exact canonical names, unique exact aliases, and explicit uppercase ticker mentions were eligible; substring fuzzy matching is not. (Phase 6.1 replaced these rules with the stricter `content-linker/2`; see below.) A live false-positive ticker association found during validation was rejected and removed. The final live corpus had no reliable links, while deterministic linking tests pass.
 
-Content ingestion refreshes linked subjects' SearchDocument projections so recent news titles contribute search context. Search still returns canonical subjects rather than articles. Finance Trending remains the existing Market Pulse composite ranking and now includes up to three related-news previews when reliable links exist; chronological feed positions never enter RRF.
+Content ingestion refreshes linked subjects' SearchDocument projections so recent news titles contribute search context. Search still returns canonical subjects rather than articles. Finance Trending was then the Market Pulse composite ranking with related-news previews (replaced by the Event-centric Trending of Trending-1); chronological feed positions never enter RRF.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/v1/news` | Paginated chronological content (`domain`, `source`, `language`, `subject_id`, `limit`, `offset`) |
+| GET | `/api/v1/news` | Paginated chronological content (`domain`, `source`, `language`, `subject_id`, `content_type` = `news`/`feed`, `limit`, `offset`) |
 | GET | `/api/v1/today` | Latest News (five per source) plus separately labelled Market Pulse |
-| GET | `/api/v1/trending` | Composite subjects with related-news count and preview |
+| GET | `/api/v1/trending` | Event cards from publishers' ranked article lists (Trending-1; previously composite subjects) |
 | GET | `/api/v1/sources` | Ranking/news/feed/market-pulse source semantics |
 
 ```bash
@@ -302,7 +303,7 @@ Live validation on 2026-09-27 persisted 105 content items: CNBC 30, Nasdaq 15, �
 
 ## Phase 4 — External Company Ranking Tracker
 
-External Rankings are not our opinion. The tracker stores company rankings exactly as external publishers publish them and follows their history. It never computes a platform company score, never combines incompatible metrics (market cap, revenue, total assets), and is separate from Today (source-native lists), Trending (cross-source attention RRF) and Search (query relevance).
+External Rankings are not our opinion. The tracker stores company rankings exactly as external publishers publish them and follows their history. It never computes a platform company score, never combines incompatible metrics (market cap, revenue, total assets), and is separate from Today (source-native lists), Trending (Events on publishers' ranked article lists) and Search (query relevance).
 
 ```text
 External ranking publisher
@@ -1036,3 +1037,33 @@ python -m industry_intelligence.cli update-freshness [--max-age-hours 26] [--jso
 ```
 
 Details: [docs/deployment.md](docs/deployment.md) §8–10, restores: [docs/restore.md](docs/restore.md).
+
+## Trending-1 — Event-centric Trending from publishers' ranked lists
+
+`/trending` shows Events, not Subjects. Its only popularity evidence is a publisher's own
+ranked list of articles:
+
+| Key | Publisher · list | Evidence kept |
+| --- | --- | --- |
+| `sina_finance_hot` | 新浪财经 · 热门新闻排行 · 新闻榜 · 点击量排行 | row order, clicks, daily window (Beijing date) |
+| `gematsu_popular` | Gematsu · Popular Posts | publisher order |
+| `game_3dm_hot` | 3DM · 近期热门 | publisher order |
+| `hacker_news_top` | Hacker News · Top Stories | HN position, points |
+
+```
+publisher ranked list → ContentItem (same Source as the publisher's feed)
+        → EventContentLink → Event → GET /api/v1/trending → Event cards
+```
+
+- Each list observation is an append-only snapshot (`IngestionBatch`, `result.kind =
+  news_ranking`); the latest snapshot per list is read. No migration was needed.
+- A card keeps every publisher rank separately (an Event on two lists shows both). Ranks from
+  different publishers are never compared or combined, and there is no trend, hot, or combined
+  score. Display order: lists in a fixed order, each in its publisher's own order — not a
+  popularity judgement.
+- Game, coin, stock, and repository charts rank entities, not news; they stay on Today and
+  Subject Detail and never make an Event "trending".
+- The lists run in the daily `intelligence-update` content stage; one list by hand:
+  `python -m industry_intelligence.cli ingest-content gematsu_popular`.
+
+The implementation record, decisions, and live verification are in `DEVELOPMENT.md`.

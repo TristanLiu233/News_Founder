@@ -2,36 +2,49 @@
 
 import { useEffect, useState } from "react";
 
-import { DiscoverTabs, DomainTabs, InfoNote, isDomain, NewsList, PageState, TrendingTopicSummary } from "../../components/shared";
-import { fetchTrending, type Domain, type TrendingDomain, type TrendingItem } from "../../lib/api";
-import { common, formatDateTime, useLocale, type Locale } from "../../lib/i18n";
+import { DiscoverTabs, DomainTabs, InfoNote, isDomain, listWindowLabel, PageState, TrendingEventCard } from "../../components/shared";
+import { fetchTrending, type Domain, type TrendingDomain } from "../../lib/api";
+import { common, formatDateTime, useLocale } from "../../lib/i18n";
 
 const DEFAULT_LIMIT = 20;
 const EXPANDED_LIMIT = 50;
 
 const copy = {
-  en: {eyebrow: "Discover", title: "Trending", intro: "Topics drawing attention across each domain's source rankings right now.", methodologyText: ["Topics are ranked by freshness-weighted reciprocal rank fusion (RRF) of each domain's current source rankings: a higher position in more lists, observed more recently, gives a higher score.", "Each source list has a weight; freshness decays with the age of its snapshot. A topic's score is the sum of its source contributions.", "Trending measures cross-platform attention, not quality, merit or a prediction. Scores are never compared across domains."], financeNote: "Finance Trending is built only from Market Pulse rankings (crypto trends, market cap, A-share turnover). News feeds never enter this ranking.", calculated: "Calculated", showing: (shown: number, total: number) => `Showing ${shown} of ${total}`, showTop: (count: number) => `Show Top ${count}`, showTop20: "Show Top 20", unavailable: "No composite ranking has been calculated for this domain yet.", breakdown: "Sources", relatedNews: "Related News", score: "score", coverage: {chinese: "Chinese sources", international: "International sources", both: "Chinese + International"}, weight: "weight", freshness: "freshness", contribution: "contribution"},
-  "zh-CN": {eyebrow: "发现", title: "综合趋势", intro: "各领域来源榜单中当前受到关注的主题。", methodologyText: ["主题按带时效衰减的加权倒数排名融合（RRF）排序：在更多来源榜单中排名更靠前、观测更新的主题分数更高。", "每个来源榜单有各自的权重；时效随快照的时间衰减。主题分数为各来源贡献之和。", "综合趋势衡量跨平台关注度，不代表质量、价值或预测。不同领域的分数互不比较。"], financeNote: "金融综合趋势仅由市场动态榜单（加密货币热搜、市值、A 股成交额）计算，新闻资讯不参与排名。", calculated: "计算于", showing: (shown: number, total: number) => `显示 ${shown} / ${total}`, showTop: (count: number) => `显示前 ${count}`, showTop20: "显示前 20", unavailable: "该领域暂无综合排名。", breakdown: "来源", relatedNews: "相关新闻", score: "分数", coverage: {chinese: "中文来源", international: "国际来源", both: "中文 + 国际来源"}, weight: "权重", freshness: "时效", contribution: "贡献"},
+  en: {
+    eyebrow: "Discover", title: "Trending",
+    intro: "Events reported by the articles that publishers list on their own popularity rankings.",
+    rankedLists: "Publisher lists", observed: "observed",
+    methodologyText: [
+      "Each card is an event. Its reports appear on publishers' own ranked lists, such as a click ranking or a popular-posts list. The number shown (#2) is the publisher's own position in that list, exactly as published.",
+      "Ranks from different publishers are not comparable and are never combined. There is no platform popularity, trend or hotness score.",
+      "Display order: the lists in a fixed order, each in its publisher's own order; an event listed more than once appears once, at its first listing, with every rank shown. The order is not our judgement of popularity.",
+      "Topics are subjects linked to the event on exact evidence. They are context, not what is trending.",
+      "Lists that rank games, coins, stocks or repositories rather than articles appear on Today, not here.",
+    ],
+    pending: (count: number) => `${count} listed ${count === 1 ? "report is" : "reports are"} not grouped into an event yet.`,
+    showing: (shown: number, total: number) => `Showing ${shown} of ${total} events`,
+    showMore: (count: number) => `Show up to ${count}`, showFewer: "Show fewer",
+    unavailable: "No publisher's ranked news list is collected for this domain yet.",
+    empty: "No listed report has been grouped into an event yet.",
+  },
+  "zh-CN": {
+    eyebrow: "发现", title: "热门",
+    intro: "发布方在自有热门榜单中列出的文章所报道的事件。",
+    rankedLists: "发布方榜单", observed: "采集于",
+    methodologyText: [
+      "每张卡片是一个事件，其报道出现在发布方自有的排行榜上，例如点击量排行或热门文章列表。显示的名次（#2）是该文章在发布方榜单中的原始位置，按原样保留。",
+      "不同发布方的名次不可比较，也从不合并。平台不计算任何热度、趋势或受欢迎程度分数。",
+      "展示顺序：各榜单按固定顺序排列，每个榜单内保持发布方自己的顺序；同一事件多次上榜只显示一次（位于首次出现处），并列出全部名次。该顺序不代表我们对热度的判断。",
+      "主题是依据确切证据与事件关联的对象，仅作为背景信息，并非热门本身。",
+      "对游戏、加密货币、股票或代码仓库（而非文章）排名的榜单显示在“今日”页面，不在此处。",
+    ],
+    pending: (count: number) => `${count} 篇上榜报道尚未归入事件。`,
+    showing: (shown: number, total: number) => `显示 ${shown} / ${total} 个事件`,
+    showMore: (count: number) => `最多显示 ${count} 个`, showFewer: "收起",
+    unavailable: "该领域尚未采集发布方的新闻排行榜。",
+    empty: "上榜报道尚未归入事件。",
+  },
 } as const;
-
-function TrendingCard({ item, locale }: { item: TrendingItem; locale: Locale }) {
-  const t = copy[locale];
-  return <li className="trending-item">
-    <span className="rank">#{item.rank}</span>
-    <div>
-      <TrendingTopicSummary item={item} locale={locale}/>
-      {/* Score inputs stay available, collapsed; the Methodology note explains them. */}
-      <details><summary>{t.breakdown}</summary>
-        <ul className="breakdown">{item.sources.map(source => <li key={source.source_key}>
-          <strong>{source.source}</strong> #{source.source_rank} · {source.rank_list}
-          <span className="muted-score">{t.weight} {source.weight} · {t.freshness} {source.freshness.toFixed(3)} · {t.contribution} {source.contribution.toFixed(4)}</span>
-        </li>)}</ul>
-        <p className="breakdown-meta">{t.coverage[item.language_coverage]} · <span className="muted-score">{t.score} {item.final_score.toFixed(4)}</span></p>
-      </details>
-      {item.related_news_count > 0 && <details><summary>{t.relatedNews} ({item.related_news_count})</summary><NewsList items={item.related_news_preview.slice(0, 3)} locale={locale}/></details>}
-    </div>
-  </li>;
-}
 
 export default function TrendingPage() {
   const { locale } = useLocale();
@@ -60,6 +73,7 @@ export default function TrendingPage() {
   }
   const t = copy[locale];
   const current = data && data.domain === domain ? data : undefined;
+  const pending = current ? current.lists.reduce((sum, list) => sum + list.pending_event_count, 0) : 0;
   return <main><div className="shell">
     <p className="eyebrow">{t.eyebrow}</p><h1>{t.title}</h1>
     <DiscoverTabs current="trending" domain={domain} locale={locale}/>
@@ -67,20 +81,25 @@ export default function TrendingPage() {
     <p className="intro">{t.intro}</p>
     <InfoNote title={common[locale].methodology}>
       {t.methodologyText.map(text => <p key={text}>{text}</p>)}
-      {domain === "finance" && <p>{t.financeNote}</p>}
     </InfoNote>
     <PageState loading={!current} error={error} locale={locale}/>
     {current && <section className="domain" aria-labelledby="trending-heading">
-      <div className="domain-heading"><h2 id="trending-heading">{common[locale].shortDomains[current.domain]}{current.domain === "finance" && ` · ${common[locale].marketPulse}`}</h2>
-        {current.calculated_at && <span>{t.calculated} {formatDateTime(current.calculated_at, locale)}</span>}</div>
-      {current.status !== "ready" ? <p className="notice">{t.unavailable}</p> : <>
-        <article className="ranking-card"><ol className="ranking-list">{current.items.map(item => <TrendingCard key={item.subject_id} item={item} locale={locale}/>)}</ol></article>
+      <div className="domain-heading"><h2 id="trending-heading">{common[locale].shortDomains[current.domain]}</h2></div>
+      {current.lists.length > 0 && <ul className="trending-lists" aria-label={t.rankedLists}>
+        {current.lists.map(list => {
+          const stated = listWindowLabel(list.window, locale);
+          return <li key={list.source_key}><strong>{list.source}</strong> · {list.list_name}{stated && ` (${stated})`} · {t.observed} <time dateTime={list.observed_at}>{formatDateTime(list.observed_at, locale)}</time></li>;
+        })}
+      </ul>}
+      {current.status !== "ready" ? <p className="notice">{t.unavailable}</p> : current.items.length === 0 ? <p className="notice">{t.empty}</p> : <>
+        <article className="ranking-card"><ul className="trending-events">{current.items.map(item => <TrendingEventCard key={item.event.id} item={item} locale={locale}/>)}</ul></article>
         <div className="pagination">
           <span className="result-count">{t.showing(current.items.length, current.total)}</span>
-          {current.total > current.items.length && limit < EXPANDED_LIMIT && <button type="button" onClick={() => setLimit(EXPANDED_LIMIT)}>{t.showTop(EXPANDED_LIMIT)}</button>}
-          {limit > DEFAULT_LIMIT && <button type="button" onClick={() => setLimit(DEFAULT_LIMIT)}>{t.showTop20}</button>}
+          {current.total > current.items.length && limit < EXPANDED_LIMIT && <button type="button" onClick={() => setLimit(EXPANDED_LIMIT)}>{t.showMore(EXPANDED_LIMIT)}</button>}
+          {limit > DEFAULT_LIMIT && <button type="button" onClick={() => setLimit(DEFAULT_LIMIT)}>{t.showFewer}</button>}
         </div>
       </>}
+      {pending > 0 && <p className="section-note">{t.pending(pending)}</p>}
     </section>}
   </div></main>;
 }

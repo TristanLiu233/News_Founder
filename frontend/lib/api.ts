@@ -52,30 +52,35 @@ export interface NewsSource {
   status: string; items: NewsItem[];
 }
 
-export interface TrendingSource {
-  source: string; source_key: string; primary_language: string; rank_list: string;
-  source_rank: number; weight: number; freshness: number; contribution: number;
-  snapshot_time: string; age_hours: number;
-}
 export type Domain = "computer" | "finance" | "gaming";
 export type Trend = "up" | "down" | "unchanged" | "new";
 export type LanguageCoverage = "chinese" | "international" | "both";
 /** Display names resolved by the backend's shared alias rule, keyed by UI locale. */
 export type DisplayNames = Record<"en" | "zh-CN", string>;
 
-export interface TrendingItem {
-  rank: number; subject_id: string; canonical_name: string; subject_type: string;
-  localized_names: Record<string, string>; display_names: DisplayNames;
-  final_score: number; source_count: number;
-  language_coverage: LanguageCoverage; previous_rank?: number;
-  rank_change?: number; trend: Trend;
-  sources: TrendingSource[];
-  related_news_count: number;
-  related_news_preview: NewsItem[];
+/**
+ * Trending: Events whose reports are on publishers' own ranked article lists. `rank` is the
+ * publisher's position in its list, kept exactly; ranks from different publishers are never
+ * combined, and there is no platform score. `ordering` names the display rule (lists in catalog
+ * order, each in its publisher's order), which is not a popularity judgement.
+ */
+export interface ExternalRanking {
+  source_key: string; source: string; list_key: string; list_name: string; ranking_kind: string;
+  /** Only when the publisher states it, e.g. `day:2026-09-30` for a daily list. */
+  window: string | null;
+  rank: number; native_value: string | null; observed_at: string;
+  content_item_id: string; title: string; url: string; language: string;
+}
+export interface TrendingList {
+  source_key: string; source: string; list_key: string; list_name: string; ranking_kind: string;
+  window: string | null; observed_at: string; entry_count: number; pending_event_count: number;
+}
+export interface TrendingEventItem {
+  event: EventSummary; external_rankings: ExternalRanking[]; topics: EventSubjectRef[];
 }
 export interface TrendingDomain {
-  domain: Domain; status: "ready" | "unavailable";
-  calculated_at?: string; ranking_run_id?: string; total: number; items: TrendingItem[];
+  domain: Domain; status: "ready" | "unavailable"; ordering: string;
+  lists: TrendingList[]; total: number; items: TrendingEventItem[];
 }
 export interface TrendingResponse {
   generated_at: string;
@@ -89,7 +94,8 @@ export interface NewsPage {
 export interface SourceInfo {
   key: string; name: string; domain: Domain; enabled: boolean; configured: boolean;
   latest_observed_at: string | null; latest_item_count: number;
-  content_type: "ranking" | "market_pulse" | "news" | "feed";
+  /** `news_ranking`: a publisher's ranked article list (read by Trending only). */
+  content_type: "ranking" | "market_pulse" | "news" | "feed" | "news_ranking";
   /** True when the key is accepted by `/api/v1/search?source=`. */
   searchable: boolean;
 }
@@ -352,7 +358,7 @@ export function fetchTrending(
 }
 
 export function fetchNews(
-  options: {domain?: Domain; source?: string; subject_id?: string; company_id?: string; limit?: number; offset?: number},
+  options: {domain?: Domain; source?: string; subject_id?: string; company_id?: string; content_type?: "news" | "feed"; limit?: number; offset?: number},
   signal?: AbortSignal,
 ): Promise<NewsPage> {
   return getJson("/api/v1/news", options, signal);

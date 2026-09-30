@@ -151,6 +151,18 @@ def attempt_fields(kind, result=None, detail=None):
             "details": {"snapshot_key": result.get("snapshot_key")},
         }
     details = {"link_error": result["link_error"]} if result.get("link_error") else {}
+    if result.get("news_ranking"):
+        # A publisher's ranked article list: every run stores one list snapshot (``success``),
+        # whether or not its articles were new; the run's existing snapshot is a replay.
+        details["batch_id"] = result.get("batch_id")
+        return {
+            "outcome": "replayed" if result.get("replayed") else "success",
+            "fetched_count": fetched,
+            "stored_count": stored,
+            "replayed_count": _count(result.get("replayed_count")),
+            "invalid_count": adapter_rejected + (_count(result.get("invalid_count")) or 0),
+            "details": details,
+        }
     return {
         # Zero new items is a successful, unchanged fetch, never a failure.
         "outcome": "success" if stored else "unchanged",

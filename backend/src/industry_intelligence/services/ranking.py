@@ -6,13 +6,12 @@ import math
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.db.models import RankObservation, Source, Subject, SubjectAlias
 from industry_intelligence.db.models.canonical import CompositeRankingEntry, CompositeRankingRun
 from industry_intelligence.db.models.ingestion_batch import IngestionBatch
-from industry_intelligence.services.resolution import display_names
 
 
 def freshness(age_hours, half_life_hours):
@@ -199,64 +198,3 @@ def rank_domain(session, domain, settings, calculated_at=None):
     }
     session.flush()
     return run, True
-
-
-def trending(session, domain=None, limit=None):
-    from industry_intelligence.services.news import related_counts, related_preview
-
-    domains = [domain] if domain else ["computer", "finance", "gaming"]
-    output = []
-    for value in domains:
-        run = latest_successful_run(session, value)
-        if not run:
-            output.append({"domain": value, "status": "unavailable", "total": 0, "items": []})
-            continue
-        total = session.scalar(
-            select(func.count())
-            .select_from(CompositeRankingEntry)
-            .where(CompositeRankingEntry.run_id == run.id)
-        )
-        entries = session.scalars(
-            select(CompositeRankingEntry)
-            .where(CompositeRankingEntry.run_id == run.id)
-            .order_by(CompositeRankingEntry.rank)
-            .limit(limit)
-        ).all()
-        subject_ids = [entry.subject_id for entry in entries]
-        counts = related_counts(session, subject_ids)
-        related = related_preview(session, [sid for sid in subject_ids if counts.get(sid)])
-        aliases = defaultdict(list)
-        for alias in session.scalars(
-            select(SubjectAlias)
-            .where(SubjectAlias.subject_id.in_(subject_ids))
-            .order_by(SubjectAlias.locale, SubjectAlias.alias)
-        ):
-            aliases[alias.subject_id].append(
-                {"alias": alias.alias, "locale": alias.locale, "alias_type": alias.alias_type}
-            )
-        output.append(
-            {
-                "domain": value,
-                "status": "ready",
-                "calculated_at": run.calculated_at,
-                "ranking_run_id": run.id,
-                "diagnostics": run.diagnostics,
-                "total": total,
-                "items": [
-                    {
-                        "rank": entry.rank,
-                        "subject_id": entry.subject_id,
-                        "final_score": entry.final_score,
-                        "source_count": entry.source_count,
-                        **entry.details,
-                        "display_names": display_names(
-                            entry.details["canonical_name"], aliases[entry.subject_id]
-                        ),
-                        "related_news_count": counts.get(entry.subject_id, 0),
-                        "related_news_preview": related.get(entry.subject_id, []),
-                    }
-                    for entry in entries
-                ],
-            }
-        )
-    return {"generated_at": datetime.now(UTC), "domains": output}

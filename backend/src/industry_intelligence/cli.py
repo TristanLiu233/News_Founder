@@ -9,7 +9,7 @@ from uuid import UUID
 from industry_intelligence.adapters.company_profile.registry import PROFILE_SOURCES
 from industry_intelligence.adapters.company_profile.targets import TARGETS_BY_SYMBOL
 from industry_intelligence.adapters.company_ranking.registry import COMPANY_RANKINGS
-from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES
+from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES, NEWS_RANKINGS
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.config import get_settings
 from industry_intelligence.db.session import create_database_engine, create_session_factory
@@ -45,14 +45,15 @@ def main():
     single.add_argument("--batch-id")
     sub.add_parser("ingest-all")
     content = sub.add_parser("ingest-content")
-    content.add_argument("source", choices=CONTENT_SOURCES)
+    # A chronological feed, or a publisher's ranked article list (one snapshot per call).
+    content.add_argument("source", choices=[*CONTENT_SOURCES, *NEWS_RANKINGS])
     sub.add_parser("ingest-content-all")
     relink = sub.add_parser("content-relink")
     # Recompute deterministic content ↔ subject links; --dry-run lists them and writes nothing.
     relink.add_argument("--dry-run", action="store_true")
     update = sub.add_parser("content-update-all")
     # ingest (per source) → link new items → event-build; repeat --source to narrow the run.
-    update.add_argument("--source", action="append", choices=CONTENT_SOURCES)
+    update.add_argument("--source", action="append", choices=[*CONTENT_SOURCES, *NEWS_RANKINGS])
     update.add_argument("--skip-events", action="store_true")
     intelligence = sub.add_parser("intelligence-update")
     # The daily run, under the global update lock: precheck → rankings → composite → company
@@ -60,7 +61,9 @@ def main():
     # 3 degraded, 1 failed, 4 already running (another run holds the lock; nothing was done).
     intelligence.add_argument("--plan", action="store_true")
     intelligence.add_argument(
-        "--source", action="append", choices=[*SOURCES, *COMPANY_RANKINGS, *CONTENT_SOURCES]
+        "--source",
+        action="append",
+        choices=[*SOURCES, *COMPANY_RANKINGS, *CONTENT_SOURCES, *NEWS_RANKINGS],
     )
     intelligence.add_argument("--skip-ai", action="store_true")
     intelligence.add_argument("--ai-limit", type=int, default=10)
@@ -469,14 +472,17 @@ def main():
                 ingest_all_content,
                 ingest_content,
             )
-
-            result = _without_ids(
-                asyncio.run(
-                    ingest_content(args.source, settings, factory)
-                    if args.command == "ingest-content"
-                    else ingest_all_content(settings, factory)
-                )
+            from industry_intelligence.services.news_ranking_ingestion import (
+                ingest_news_ranking,
             )
+
+            if args.command == "ingest-content-all":
+                job = ingest_all_content(settings, factory)
+            elif args.source in NEWS_RANKINGS:
+                job = ingest_news_ranking(args.source, settings, factory)
+            else:
+                job = ingest_content(args.source, settings, factory)
+            result = _without_ids(asyncio.run(job))
         else:
             result = asyncio.run(
                 ingest(args.source, settings, factory, args.batch_id)

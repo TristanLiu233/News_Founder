@@ -54,7 +54,7 @@ import httpx
 from sqlalchemy import func, select, text
 
 from industry_intelligence.adapters.company_ranking.registry import COMPANY_RANKINGS
-from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES
+from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES, NEWS_RANKINGS
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.db.models import (
     ContentItem,
@@ -140,19 +140,23 @@ def error_detail(key, exc):
 
 
 def select_sources(keys=None):
-    """(ranking, company ranking, content) keys of the run; ``keys`` narrows it explicitly."""
+    """(ranking, company ranking, content) keys of the run; ``keys`` narrows it explicitly.
+
+    The content group holds the chronological feeds (``CONTENT_SOURCES``) and the publishers'
+    ranked article lists (``NEWS_RANKINGS``)."""
 
     if keys:
         wanted = set(keys)
         return (
             [key for key in SOURCES if key in wanted],
             [key for key in COMPANY_RANKINGS if key in wanted],
-            [key for key in CONTENT_SOURCES if key in wanted],
+            [key for key in (*CONTENT_SOURCES, *NEWS_RANKINGS) if key in wanted],
         )
     return (
         list(SOURCES),
         [key for key, definition in COMPANY_RANKINGS.items() if definition.daily_update],
-        list(CONTENT_SOURCES),
+        # Chronological feeds, then publishers' ranked article lists (both produce content).
+        [*CONTENT_SOURCES, *NEWS_RANKINGS],
     )
 
 
@@ -312,14 +316,23 @@ async def company_ranking_stage(settings, session_factory, keys, record=None):
     return stage
 
 
-async def content_stage(settings, session_factory, keys, record=None):
+async def content_stage(settings, session_factory, keys, record=None, run_id=None):
     from industry_intelligence.services.content_ingestion import ingest_content
+    from industry_intelligence.services.news_ranking_ingestion import ingest_news_ranking
 
     stage = StageResult("content")
+    # A ranked list stores one snapshot per run: a rerun with the same run ID replays it.
+    batch_key = ranking_batch_key(run_id) if run_id else None
+
+    def ingest_one(key):
+        if key in NEWS_RANKINGS:
+            return ingest_news_ranking(key, settings, session_factory, batch_key)
+        return ingest_content(key, settings, session_factory)
+
     await _each_source(
         stage,
         keys,
-        lambda key: ingest_content(key, settings, session_factory),
+        ingest_one,
         (
             "domain",
             "fetched_count",
@@ -570,7 +583,10 @@ async def run_update(
             "company_rankings",
             lambda: company_ranking_stage(settings, db, company_keys, record=record),
         ),
-        ("content", lambda: content_stage(settings, db, content_keys, record=record)),
+        (
+            "content",
+            lambda: content_stage(settings, db, content_keys, record=record, run_id=run_id),
+        ),
         ("links", lambda: links_stage(db)),
         ("events", lambda: events_stage(db)),
         ("ai", ai),

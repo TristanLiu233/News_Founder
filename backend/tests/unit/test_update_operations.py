@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from industry_intelligence.adapters.company_ranking.registry import COMPANY_RANKINGS
-from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES
+from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES, NEWS_RANKINGS
 from industry_intelligence.adapters.source.registry import SOURCES
 from industry_intelligence.config import Settings
 from industry_intelligence.services import intelligence_update as update
@@ -129,6 +129,24 @@ def test_content_with_no_new_items_is_unchanged_never_failed():
     )
 
 
+def test_ranked_list_attempt_is_a_stored_snapshot_even_without_new_articles():
+    result = {
+        "news_ranking": True,
+        "replayed": False,
+        "batch_id": "b1",
+        "fetched_count": 8,
+        "persisted_count": 0,
+        "replayed_count": 8,
+        "invalid_count": 0,
+        "failed_count": 1,
+    }
+    row = attempt_fields("content", result)
+    assert (row["outcome"], row["stored_count"], row["replayed_count"]) == ("success", 0, 8)
+    assert row["invalid_count"] == 1 and row["details"] == {"batch_id": "b1"}
+    replay = attempt_fields("content", {**result, "replayed": True, "fetched_count": None})
+    assert replay["outcome"] == "replayed" and replay["fetched_count"] is None
+
+
 def test_failed_attempt_is_sanitized_and_bounded():
     exc = _raised_in(FETCH, _http_error(503))
     row = attempt_fields("content", detail=update.error_detail("down", exc))
@@ -184,8 +202,10 @@ def test_health_states():
 def test_inventory_is_the_automatic_registry():
     inventory = source_inventory()
     daily = [key for key, d in COMPANY_RANKINGS.items() if d.daily_update]
-    assert [key for key, _ in inventory] == [*SOURCES, *daily, *CONTENT_SOURCES]
-    assert len(inventory) == len(SOURCES) + len(daily) + len(CONTENT_SOURCES)
+    content = [*CONTENT_SOURCES, *NEWS_RANKINGS]
+    assert [key for key, _ in inventory] == [*SOURCES, *daily, *content]
+    assert dict(inventory)["gematsu_popular"] == "content"
+    assert len(inventory) == len(SOURCES) + len(daily) + len(content)
     assert "wikipedia_largest_banks_assets" not in dict(inventory)
 
 

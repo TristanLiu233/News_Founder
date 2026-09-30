@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
-import { DOMAINS, EventList, NewsList, TrendBadge, TrendingTopicSummary } from "../components/shared";
+import { DOMAINS, EventList, NewsList, TrendBadge, TrendingEventCard } from "../components/shared";
 import {
   fetchCompanyRanking, fetchCompanyRankings, fetchEvents, fetchNews, fetchTrending,
   type CompanyRankingDetail, type CompanyRankingEntry, type CompanyRankingSummary, type Domain, type EventsPage,
@@ -14,7 +14,8 @@ import { common, formatDateTime, useLocale, type Locale } from "../lib/i18n";
 
 /**
  * Home composes existing read APIs only: latest news per domain, the latest Events (backend order),
- * the current Trending Top 5 per domain, and live external company rankings. Nothing is scored here.
+ * the first 5 Trending Events per domain (publisher-ranked, in the API's display order), and live external
+ * company rankings. Nothing is scored here.
  */
 const NEWS_PER_DOMAIN = 3;
 const LATEST_EVENTS = 5;
@@ -26,11 +27,11 @@ const RANKINGS_LIMIT = 100;
 const copy = {
   en: {
     title: "Industry Intelligence",
-    intro: "Latest reports, events, trending topics and external company rankings for Computer, Finance and Gaming.",
+    intro: "Latest reports, events, trending events and external company rankings for Computer, Finance and Gaming.",
     domainLinks: "Open Today by domain",
     today: "Today at a Glance", todayNote: "Latest reports from each domain's news sources, newest first.", viewToday: "View Today", noNews: "No reports for this domain yet.",
     events: "Latest Events", eventsNote: "Most recently reported events across all domains.", viewEvents: "View all events", noEvents: "No events yet.",
-    trending: "Trending Topics", viewTrending: "View Trending", noTrending: "No trending topics for this domain yet.",
+    trending: "Trending Events", trendingNote: "Events whose reports are on publishers' own ranked lists; each rank is the publisher's own.", viewTrending: "View Trending", noTrending: "No trending events for this domain yet.",
     rankings: "External Company Rankings", rankingsNote: "Rankings are shown as published by their original sources.", viewRankings: "View all rankings",
     noRankings: "No external rankings have been collected yet.", rankingFailed: "This ranking could not be loaded.",
     snapshot: "As of", notEnoughHistory: "Not enough history yet", openRanking: "Open ranking",
@@ -39,11 +40,11 @@ const copy = {
   },
   "zh-CN": {
     title: "行业情报",
-    intro: "汇集计算机、金融、游戏三个领域的最新报道、事件、热门主题与外部公司排行榜。",
+    intro: "汇集计算机、金融、游戏三个领域的最新报道、事件、热门事件与外部公司排行榜。",
     domainLinks: "按领域打开今日",
     today: "今日速览", todayNote: "各领域资讯来源的最新报道，按时间由新到旧。", viewToday: "查看今日", noNews: "该领域暂无报道。",
     events: "最近事件", eventsNote: "各领域最近被报道的事件。", viewEvents: "查看全部事件", noEvents: "暂无事件。",
-    trending: "热门主题", viewTrending: "查看综合趋势", noTrending: "该领域暂无热门主题。",
+    trending: "热门事件", trendingNote: "报道登上发布方自有榜单的事件；名次均为发布方自己的排名。", viewTrending: "查看热门", noTrending: "该领域暂无热门事件。",
     rankings: "外部公司排行榜", rankingsNote: "排行榜按原始来源发布的内容原样展示。", viewRankings: "查看全部排行榜",
     noRankings: "尚未采集到外部排行榜。", rankingFailed: "该榜单暂时无法加载。",
     snapshot: "数据日期", notEnoughHistory: "尚无足够历史数据", openRanking: "打开榜单",
@@ -187,16 +188,14 @@ export default function Home() {
 
     <section aria-labelledby="home-trending">
       <SectionHeader id="home-trending" title={t.trending} link="/trending" linkText={t.viewTrending}/>
+      <p className="section-note">{t.trendingNote}</p>
       <SectionState state={trending} locale={locale}>
         {data => <div className="card-grid home-grid">{DOMAINS.map(domain => {
           const current = data.domains.find(item => item.domain === domain);
           const items = current?.status === "ready" ? current.items.slice(0, TRENDING_TOP) : [];
           return <article className="ranking-card compact" key={domain} aria-labelledby={`trending-${domain}`}>
-            <header className="list-header"><h3 id={`trending-${domain}`}>{c.shortDomains[domain]}{domain === "finance" && ` · ${c.marketPulse}`}</h3></header>
-            {items.length === 0 ? <p className="empty">{t.noTrending}</p> : <ol className="ranking-list">{items.map(item => <li key={item.subject_id}>
-              <span className="rank">#{item.rank}</span>
-              <div><TrendingTopicSummary item={item} locale={locale}/></div>
-            </li>)}</ol>}
+            <header className="list-header"><h3 id={`trending-${domain}`}>{c.shortDomains[domain]}</h3></header>
+            {items.length === 0 ? <p className="empty">{t.noTrending}</p> : <ul className="trending-events">{items.map(item => <TrendingEventCard key={item.event.id} item={item} locale={locale} compact/>)}</ul>}
             <p className="card-footer"><Link href={`/trending?domain=${domain}`}>{t.viewTrending} →</Link></p>
           </article>;
         })}</div>}

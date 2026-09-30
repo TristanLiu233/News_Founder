@@ -36,8 +36,12 @@ def list_news(
     limit=20,
     offset=0,
     company_id=None,
+    content_type=None,
 ):
     query = select(ContentItem, Source).join(Source)
+    if content_type:
+        # One feed of a publisher (e.g. 新浪财经 7×24 ``feed``) apart from its other articles.
+        query = query.where(ContentItem.content_type == content_type)
     if subject_id:
         query = query.join(ContentSubjectLink).where(ContentSubjectLink.subject_id == subject_id)
     if company_id:
@@ -87,10 +91,3 @@ def related_counts(session, subject_ids):
             .group_by(ContentSubjectLink.subject_id)
         ).all()
     )
-
-
-def related_preview(session, subject_ids, limit=3):
-    return {
-        subject_id: list_news(session, subject_id=subject_id, limit=limit)
-        for subject_id in subject_ids
-    }

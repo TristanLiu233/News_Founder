@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 
-import { fetchEvents, type Domain, type EventSummary, type EventsPage, type NewsItem, type Trend, type TrendingItem } from "../lib/api";
+import { fetchEvents, type Domain, type EventSummary, type EventsPage, type NewsItem, type Trend, type TrendingEventItem } from "../lib/api";
 import { common, formatDateTime, type Locale } from "../lib/i18n";
 
 export const DOMAINS: Domain[] = ["computer", "finance", "gaming"];
@@ -25,13 +25,37 @@ export function TrendBadge({ trend, change, locale }: { trend: Trend | null; cha
   return <span className={`trend trend-${trend}`}><span aria-hidden="true">{symbol}</span><span className="visually-hidden">{t.trend[trend]}{amount ? ` ${amount}` : ""}</span></span>;
 }
 
-/** One Trending topic as shown on Trending and Home: name, trend cue, type, and source count (no score inputs). */
-export function TrendingTopicSummary({ item, locale }: { item: TrendingItem; locale: Locale }) {
+/**
+ * One Trending Event (Trending and Home): headline → Event Detail, then every publisher's own rank
+ * for its reports exactly as published (never combined or compared), time, coverage, and Topics as
+ * context. There is deliberately no platform position number.
+ */
+export function TrendingEventCard({ item, locale, compact = false }: { item: TrendingEventItem; locale: Locale; compact?: boolean }) {
   const t = common[locale];
-  return <>
-    <div className="row-main"><Link href={`/subject/${item.subject_id}`} className="subject-link">{item.display_names[locale]}</Link><TrendBadge trend={item.trend} change={item.rank_change} locale={locale}/></div>
-    <p><span className="tag">{t.subjectTypes[item.subject_type] ?? item.subject_type}</span> {t.sources(item.source_count)}</p>
-  </>;
+  const { event } = item;
+  return <li className="trending-event">
+    <Link className="event-title" href={`/event/${event.id}`} lang={event.title_language}>{event.canonical_title}</Link>
+    <ul className="rank-evidence" aria-label={t.publisherRanks}>
+      {item.external_rankings.map(ranking => <li key={`${ranking.source_key}:${ranking.content_item_id}`}>
+        <span>{ranking.source} · {ranking.list_name}</span> <strong className="native-rank"><span className="visually-hidden">{t.rankWord} </span>#{ranking.rank}</strong>
+      </li>)}
+    </ul>
+    <p className="meta">
+      <span>{t.lastReported} <time dateTime={event.time.last_published_at}>{formatDateTime(event.time.last_published_at, locale)}</time></span>
+      <span>{t.reports(event.content_count)}</span>
+      <span>{t.sources(event.source_count)}</span>
+    </p>
+    {!compact && item.topics.length > 0 && <ul className="chips event-entities" aria-label={t.relatedTopics}>
+      {item.topics.map(topic => <li key={topic.id}><Link href={`/subject/${topic.id}`}>{topic.display_names[locale]}</Link> <small>{t.subjectTag}</small></li>)}
+    </ul>}
+  </li>;
+}
+
+/** A publisher-stated list window, e.g. `day:2026-09-30`; null when the publisher states none. */
+export function listWindowLabel(window: string | null, locale: Locale) {
+  if (!window) return null;
+  const [kind, value] = window.split(":");
+  return kind === "day" && value ? common[locale].dailyList(value) : window;
 }
 
 /** Composite attention domain label; Finance composite rankings are Market Pulse only. */

@@ -226,6 +226,17 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .event-sources { margin: .25rem 0 0; color: #87908a; font-size: .76rem; }
 .event-entities { margin-top: .5rem; }
 .event-entities li { padding: .15rem .5rem; font-size: .8rem; }
+/* Trending: Event cards with each publisher's own rank as evidence (no platform position). */
+.trending-events { margin: 0; padding: 0; list-style: none; }
+.trending-event { padding: .8rem 0; border-bottom: 1px solid #efede7; }
+.trending-event:last-child { border-bottom: 0; }
+.ranking-card.compact .trending-event:first-child { padding-top: .25rem; }
+.trending-event .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; font-size: .8rem; }
+.rank-evidence { display: flex; flex-wrap: wrap; gap: .35rem; margin: .45rem 0 0; padding: 0; list-style: none; }
+.rank-evidence li { padding: .12rem .5rem; border-radius: .3rem; background: #e6f2ec; color: #0b6e50; font-size: .78rem; overflow-wrap: anywhere; }
+.native-rank { font-weight: 800; }
+.trending-lists { margin: 0 0 .75rem; padding: 0; list-style: none; color: #626861; font-size: .8rem; }
+.trending-lists li { padding: .1rem 0; overflow-wrap: anywhere; }
 .event-timeline { margin: 0; padding: 0; list-style: none; }
 .event-timeline li { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: .75rem; padding: .75rem 0; border-bottom: 1px solid #efede7; }
 .event-timeline li:last-child { border-bottom: 0; }
