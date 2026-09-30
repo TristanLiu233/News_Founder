@@ -1,3 +1,7 @@
+# Optional local PostgreSQL in Docker (pgvector/pgvector:pg16 on 127.0.0.1:5432).
+# Since Local-1 (2026-09-30) the local runtime is native PostgreSQL 16 on 127.0.0.1:5433 and daily
+# local operation does not need Docker Desktop; this file stays as an alternative local database and
+# as the rollback path (README "Local runtime"). Production uses deploy/docker-compose.production.yml.
 services:
   db:
     image: pgvector/pgvector:pg16

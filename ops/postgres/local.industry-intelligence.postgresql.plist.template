@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Local-1: native PostgreSQL 16 for local daily operation (no Docker Desktop).
+     Install by replacing __PG_BIN__, __PGDATA__, and __LOG_DIR__ with absolute paths (see README).
+     Listen address and port live in the cluster's postgresql.conf (localhost, 5433), not here. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.industry-intelligence.postgresql</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PG_BIN__/postgres</string>
+    <string>-D</string>
+    <string>__PGDATA__</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/postgresql.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/postgresql.log</string>
+</dict>
+</plist>
