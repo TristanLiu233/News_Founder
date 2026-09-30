@@ -1,0 +1,13 @@
+# 10:00 in Australia/Sydney every day, whatever the server's own time zone: systemd resolves the
+# IANA zone, so AEST/AEDT changes need no UTC offset (the DST switches at 02:00/03:00 never touch
+# 10:00). Persistent=true runs a missed update once after downtime.
+[Unit]
+Description=Daily Industry Intelligence update at 10:00 Australia/Sydney
+
+[Timer]
+OnCalendar=*-*-* 10:00:00 Australia/Sydney
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

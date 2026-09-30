@@ -1,0 +1,8 @@
+# Failure notification for the unit named by the instance (OnFailure=…@%n.service).
+[Unit]
+Description=Industry Intelligence failure notification for %i
+
+[Service]
+Type=oneshot
+ExecStart=/opt/industry-intelligence/deploy/bin/notify-failure.sh %i
+TimeoutStartSec=2min

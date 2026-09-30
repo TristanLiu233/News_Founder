@@ -1,0 +1,19 @@
+# Daily intelligence update (Deployment-2A). Installed as a copy in /etc/systemd/system/;
+# the repository checkout is expected at /opt/industry-intelligence (adjust paths if it lives elsewhere).
+# Exactly one command, intelligence-update --skip-ai, in a one-shot backend container. The
+# PostgreSQL advisory lock inside the command is the only concurrency control (a simultaneous run
+# exits 4). No SuccessExitStatus: every non-zero exit (1 failed, 3 degraded, 4 already running)
+# leaves the unit failed with its real status and triggers the notification.
+[Unit]
+Description=Industry Intelligence daily update (intelligence-update --skip-ai)
+Documentation=file:///opt/industry-intelligence/docs/deployment.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=industry-intelligence-notify@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/industry-intelligence
+ExecStart=/opt/industry-intelligence/deploy/bin/ii-compose run --rm -T backend python -m industry_intelligence.cli intelligence-update --skip-ai
+TimeoutStartSec=2h

@@ -1,0 +1,11 @@
+# 11:00 Australia/Sydney, after the 10:00 update; a missed backup runs once after downtime.
+[Unit]
+Description=Daily Industry Intelligence backup at 11:00 Australia/Sydney
+
+[Timer]
+OnCalendar=*-*-* 11:00:00 Australia/Sydney
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

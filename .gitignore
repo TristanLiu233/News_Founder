@@ -3,6 +3,14 @@
 .env.*
 !.env.example
 !frontend/.env.example
+# Production (Deployment-2A): only templates are tracked; never real env files, hooks, dumps, or TLS
+deploy/*.env
+deploy/hooks/*
+!deploy/hooks/*.example
+*.dump
+*.pem
+*.key
+*.crt
 
 # Python
 __pycache__/

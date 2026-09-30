@@ -1,0 +1,99 @@
+# Production stack (Deployment-2A): Caddy → frontend / backend → PostgreSQL on one Linux host.
+#
+# Always run it through deploy/bin/ii-compose, which passes the root-only env file
+# (/etc/industry-intelligence/production.env by default) as --env-file and II_ENV_FILE:
+#
+#   sudo deploy/bin/ii-compose build
+#   sudo deploy/bin/ii-compose up -d postgres
+#   sudo deploy/bin/ii-compose run --rm backend alembic upgrade head      # explicit, never automatic
+#   sudo deploy/bin/ii-compose up -d
+#
+# Only Caddy publishes ports. PostgreSQL has no published port and sits on an internal network
+# with no egress; the backend joins it and the edge network (the CLI jobs need outbound HTTPS to
+# the sources). Migrations are never run on container start.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    # Same image as development (PostgreSQL 16 + pgvector); pg_trgm ships with PostgreSQL.
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in the production env file}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in the production env file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the production env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    shm_size: 256mb
+    logging: *logging
+
+  backend:
+    # One image for the API and every one-shot CLI job (docker compose run --rm backend …).
+    build:
+      context: ../backend
+    image: industry-intelligence-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - ${II_ENV_FILE:?run through deploy/bin/ii-compose}
+    environment:
+      ENVIRONMENT: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [db, edge]
+    init: true
+    logging: *logging
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Inlined into the browser bundle: the public origin, https://<APP_DOMAIN> (no path).
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set NEXT_PUBLIC_API_BASE_URL}
+    image: industry-intelligence-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    networks: [edge]
+    init: true
+    logging: *logging
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN in the production env file}
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+      - "${CADDY_HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks: [edge]
+    logging: *logging
+
+networks:
+  db:
+    internal: true
+  edge: {}
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

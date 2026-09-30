@@ -1,0 +1,10 @@
+# Only pyproject/constraints/README, src, alembic.ini, and migrations are copied into the image.
+**/__pycache__
+**/*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+.venv
+tests
+.env
+.env.*

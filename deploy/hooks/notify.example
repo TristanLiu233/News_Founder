@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Example notification hook — copy to /etc/industry-intelligence/hooks/notify (root, mode 700) and
+# adapt to the chosen channel. Called with the subject as $1 and the message on stdin. Keep any
+# credential (webhook URL, token, SMTP password) in a root-only file on the server, never in Git.
+set -euo pipefail
+subject="$1"
+
+# Option A — email through the host's MTA (e.g. msmtp or postfix configured separately):
+#   mail -s "$subject" "$(cat /etc/industry-intelligence/secrets/notify-email)"
+
+# Option B — JSON webhook (Slack/Discord/ntfy/…); the URL lives in a root-only file:
+#   url="$(cat /etc/industry-intelligence/secrets/notify-webhook-url)"
+#   body="$(cat)"
+#   python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1] + "\n\n" + sys.stdin.read()}))' \
+#       "$subject" <<<"$body" | curl -fsS --max-time 20 -H 'Content-Type: application/json' -d @- "$url"
+
+echo "notify hook is not configured: $subject" >&2
+exit 1

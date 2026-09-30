@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# docker compose for the production stack with the root-only env file (Deployment-2A).
+#   II_ENV_FILE   env file (default /etc/industry-intelligence/production.env)
+#   II_PROJECT    compose project name (default industry-intelligence)
+set -euo pipefail
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export II_ENV_FILE="${II_ENV_FILE:-/etc/industry-intelligence/production.env}"
+if [[ ! -r "$II_ENV_FILE" ]]; then
+    echo "ii-compose: env file $II_ENV_FILE is missing or unreadable (run as root?)" >&2
+    exit 78
+fi
+exec docker compose \
+    --project-name "${II_PROJECT:-industry-intelligence}" \
+    --env-file "$II_ENV_FILE" \
+    --file "$DEPLOY_DIR/docker-compose.production.yml" \
+    "$@"

@@ -1,0 +1,17 @@
+# Daily pg_dump backup (Deployment-2A); see deploy/bin/backup.sh for retention and exit codes
+# (0 ok, 1 failed, 3 stored locally without an off-host copy). Non-zero triggers the notification.
+[Unit]
+Description=Industry Intelligence PostgreSQL backup (pg_dump -Fc)
+Documentation=file:///opt/industry-intelligence/docs/restore.md
+Requires=docker.service
+After=docker.service
+OnFailure=industry-intelligence-notify@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/industry-intelligence
+Environment=BACKUP_DIR=/var/backups/industry-intelligence
+Environment=BACKUP_DAILY_KEEP=14
+Environment=BACKUP_MONTHLY_KEEP=6
+ExecStart=/opt/industry-intelligence/deploy/bin/backup.sh
+TimeoutStartSec=1h

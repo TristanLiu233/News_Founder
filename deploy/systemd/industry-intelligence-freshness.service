@@ -1,0 +1,14 @@
+# Freshness check (Deployment-2A): read-only update-freshness against update_runs; exit 1 when no
+# successful intelligence-update started within the last 26 hours. Never starts an update.
+[Unit]
+Description=Industry Intelligence update freshness check
+Documentation=file:///opt/industry-intelligence/docs/deployment.md
+Requires=docker.service
+After=docker.service
+OnFailure=industry-intelligence-notify@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/industry-intelligence
+ExecStart=/opt/industry-intelligence/deploy/bin/ii-compose run --rm -T backend python -m industry_intelligence.cli update-freshness
+TimeoutStartSec=10min

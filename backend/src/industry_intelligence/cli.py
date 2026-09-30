@@ -79,6 +79,10 @@ def main():
     health = sub.add_parser("source-health")
     # Read-only: health of every automatic source from recorded attempts; no network request.
     health.add_argument("--json", action="store_true")
+    freshness = sub.add_parser("update-freshness")
+    # Read-only: exit 0 when a successful intelligence-update started within the window, else 1.
+    freshness.add_argument("--max-age-hours", type=float, default=26)
+    freshness.add_argument("--json", action="store_true")
     audit = sub.add_parser("data-quality-audit")
     # Read-only invariant audit; exits 1 only when an error-level check fails.
     audit.add_argument("--json", action="store_true")
@@ -241,6 +245,30 @@ def main():
             else:
                 print(render_text(report))
             raise SystemExit(0)
+        elif args.command == "update-freshness":
+            from datetime import timedelta
+
+            from sqlalchemy import text
+
+            from industry_intelligence.services.update_freshness import (
+                render_text,
+                update_freshness,
+            )
+
+            if not 0 < args.max_age_hours <= 24 * 14:
+                parser.error("--max-age-hours must be in (0, 336]")
+            session = factory()
+            try:
+                session.execute(text("SET TRANSACTION READ ONLY"))
+                report = update_freshness(session, max_age=timedelta(hours=args.max_age_hours))
+            finally:
+                session.rollback()
+                session.close()
+            if args.json:
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+            else:
+                print(render_text(report))
+            raise SystemExit(0 if report["status"] == "fresh" else 1)
         elif args.command == "intelligence-update":
             from industry_intelligence.services.intelligence_update import (
                 execute_update,

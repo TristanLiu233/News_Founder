@@ -1,0 +1,14 @@
+# 12:30 Australia/Sydney: more than 26 h after the previous day's 10:00 start, so a missed or
+# failed update today is reported the same day (except on the 23-hour day when DST starts, where it
+# is reported the next day). Not persistent: after downtime the next scheduled check covers it,
+# instead of racing the catch-up update at boot.
+[Unit]
+Description=Daily Industry Intelligence freshness check at 12:30 Australia/Sydney
+
+[Timer]
+OnCalendar=*-*-* 12:30:00 Australia/Sydney
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

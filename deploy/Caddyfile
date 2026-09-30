@@ -1,0 +1,29 @@
+# Production reverse proxy (Deployment-2A). One public origin, https://{$APP_DOMAIN}; Caddy obtains
+# and renews the certificate automatically (ports 80 and 443 must reach this host).
+#
+# Backend routes are served as-is, no prefix rewriting: FastAPI serves /api/v1/* and the health
+# endpoints /health and /health/db at the root. Everything else is the Next.js frontend
+# (/docs, /redoc, /openapi.json are hidden by the backend in production and fall through to the
+# frontend's 404). PostgreSQL and the internal backend/frontend ports are never published.
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	@backend path /api/* /health /health/db
+	handle @backend {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	log
+}

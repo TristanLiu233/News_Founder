@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Example off-host backup hook — copy to /etc/industry-intelligence/hooks/backup-remote (root,
+# mode 700) and adapt to the chosen destination. Called with the new dump path as $1; exit 0 only
+# when the copy is complete. Keep credentials in a root-only file on the server, never in Git.
+set -euo pipefail
+dump="$1"
+
+# Option A — S3-compatible storage (e.g. Backblaze B2) with rclone configured as root:
+#   rclone copy --immutable "$dump" "offsite:industry-intelligence-backups/daily/"
+
+# Option B — another server over SSH with a restricted key:
+#   rsync -a --chmod=F600 "$dump" backup@backup-host:/srv/backups/industry-intelligence/
+
+echo "off-host backup hook is not configured: $dump" >&2
+exit 1
