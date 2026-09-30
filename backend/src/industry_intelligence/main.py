@@ -38,10 +38,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             engine.dispose()
 
+    # The public production API serves pages only; its interactive docs and schema stay private.
+    public_docs = resolved_settings.environment.lower() != "production"
     app = FastAPI(
         title=resolved_settings.app_name,
         version="0.1.0",
         lifespan=lifespan,
+        docs_url="/docs" if public_docs else None,
+        redoc_url="/redoc" if public_docs else None,
+        openapi_url="/openapi.json" if public_docs else None,
     )
     app.state.settings = resolved_settings
     app.state.db_engine = engine

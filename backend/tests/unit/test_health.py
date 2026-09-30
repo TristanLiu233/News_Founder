@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
+from industry_intelligence.main import create_app
+
 
 def test_health_endpoint(client: TestClient) -> None:
     response = client.get("/health")
@@ -39,6 +41,20 @@ def test_database_health_endpoint_when_connected(app, client: TestClient) -> Non
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "database": "connected"}
+
+
+def test_api_docs_are_served_outside_production(client: TestClient) -> None:
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 200
+
+
+def test_production_hides_api_docs_but_keeps_health(settings) -> None:
+    production = create_app(settings.model_copy(update={"environment": "production"}))
+
+    with TestClient(production) as client:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert client.get(path).status_code == 404
+        assert client.get("/health").json() == {"status": "ok"}
 
 
 def test_database_health_endpoint_when_unavailable(app, client: TestClient) -> None:
