@@ -26,6 +26,7 @@ def get_search(
     locale: Literal["en", "zh-CN"] = "en",
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100000),
+    stories: Literal["include", "exclude"] = "include",
 ):
     normalized = normalize_search_query(q)
     if not 2 <= len(normalized) <= 200:
@@ -48,4 +49,6 @@ def get_search(
         limit=limit,
         offset=offset,
         locale=locale,
+        # Product-2.1: the Search page asks for Topics without ranked-story Subjects.
+        exclude_stories=stories == "exclude",
     )

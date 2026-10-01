@@ -135,7 +135,8 @@ export default function TodayPage() {
     <InfoNote title={t.about}>{t.aboutText.map(text => <p key={text}>{text}</p>)}</InfoNote>
     <PageState loading={!current && !error} error={error} locale={locale}/>
     {current && domain && <section className="domain" aria-labelledby="today-heading">
-      <div className="domain-heading"><h2 id="today-heading">{common[locale].shortDomains[domain]}</h2></div>
+      {/* The selected domain tab already names the domain: the heading stays for screen readers only. */}
+      <h2 id="today-heading" className="visually-hidden">{common[locale].shortDomains[domain]}</h2>
       {current.status !== "ready" ? <p className="notice">{t.unavailable}</p> : <>
         {current.collected_at && <p className="section-note">{t.collected(current.windowHours, formatDateTime(current.collected_at, locale))}</p>}
         {current.items.length === 0 ? <p className="notice">{t.empty}</p> : <article className="ranking-card"><EventList items={current.items} locale={locale}/></article>}

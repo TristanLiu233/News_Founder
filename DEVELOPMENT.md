@@ -35,9 +35,9 @@ planned or speculative results in a finished entry.
 ## Current Baseline
 
 - Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1, Product-1, Trending-2,
-  Trending-3, Source-1, Product-2).
-- Backend: pytest 885 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
-  `industry_intelligence_test`; unit 660; Ruff check and format check clean (after Product-2).
+  Trending-3, Source-1, Product-2, Product-2.1).
+- Backend: pytest 886 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
+  `industry_intelligence_test`; unit 660; Ruff check and format check clean (after Product-2.1).
 - Frontend: ESLint, TypeScript, and the Next.js production build (11 routes) pass.
 - Live dev database: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health`
   30/31 healthy and Trending lists 6/6 healthy after Source-1 (`eastmoney_turnover`, a Market
@@ -1658,3 +1658,128 @@ opens.
 
 Live with the new flow for a few daily runs; then decide on the "Story" topics in Search and on a
 Home/Today mobile length review.
+
+## 2026-10-01 — Product-2.1 — Search Quality & Mobile Reading Density
+
+Status: complete (2026-10-01). No migration. Sources, Trending, Today semantics, AI, and the
+scheduler (`--skip-ai`) unchanged.
+
+### Goal
+
+Fix two measured problems: one-article ranked stories shown as Search Topics, and Home/Today
+length on phones — structurally, without smaller type or separate mobile data.
+
+### Start state
+
+`phase-7` at `a79bc1b`, clean, no remote; Alembic `20260930_12`; pytest **885 passed, 1
+skipped**; Ruff clean (184 files); `data-quality-audit` 0 / 0 / 6 info; ESLint, TypeScript,
+build (11 routes) pass.
+
+### Search audit and Story classification
+
+- Taxonomy: ranked stories are Subjects with the persisted `subject_type = 'event'`
+  (`SubjectType.EVENT`), created only by the Hacker News, IT之家 日榜, and 虎嗅 ranking adapters;
+  their only content links are `same_article` (0 of another strategy); 85 of 303 also have an
+  `EventSubjectLink` (their article is a canonical Event's report), all 38 虎嗅 stories and the
+  older HN/IT之家 ones have none. Real Topics (game, repository, stock) never carry that type.
+- Live Topic results (14 queries: Microsoft, 微软, NVIDIA, 英伟达, Bitcoin, 比特币, BTC, PMI,
+  Mate 90, Gemini, 央行, Witcher, 华为, OpenAI): 31 results = **10 reusable Topics**, **3 stories
+  already represented by an Event**, **18 stories without an Event**; e.g. 华为 → 9 stories, 0
+  Topics; Mate 90 → 5 stories; Microsoft → 1 repository + 3 stories; NVIDIA → 2 repositories + 1
+  story; Bitcoin/BTC/比特币/Witcher → Topics only.
+- Ambiguous: none by type; the 18 Event-less stories are the case that must not be lost.
+
+### Filtering decision
+
+Structural and read-only: the Search page asks for Topics with `stories=exclude`
+(`search(..., exclude_stories=True)`), which removes rows whose persisted `subject_type` is
+`event` after retrieval and returns their count as `excluded_story_count`; an explicit
+`subject_type=event` still returns them. Not used: the EventSubjectLink-only variant (it would
+have hidden 3 of 21 stories — too little), and any name/title/length heuristic. The API default
+(`stories=include`) is unchanged. Nothing is lost: when stories matched, the Topics section shows
+"N stories from source rankings (one listed article each, not a topic) also match. Show them",
+which reruns the query with Topic type = Story. After: the 14 queries return the same 10 Topics
+and 0 stories by default; the 21 stories are reachable through the link.
+
+### Mobile density measurements (375 px)
+
+What consumed height: Home stacks three domain cards per section in one column (Trending 2,250
+px, Today 1,412, Rankings 1,570 in zh-CN); every Event card spent a line on "1 report · 1 source"
+plus a separate source-name line; Today repeated the selected domain as a heading.
+
+| Page (375 px) | zh-CN before | zh-CN after | English before | English after | Main change |
+| --- | --- | --- | --- | --- | --- |
+| Home | 6,009 | 4,413 (−27%) | 6,198 | 4,326 (−30%) | 2 Trending + 2 Today per domain, 3 rows per ranking card when cards stack |
+| Today (Computer) | 2,253 | 1,863 (−17%) | 2,216 | 1,822 (−18%) | one metadata line per card (time · sources · counts only when > 1), domain heading screen-reader only |
+| Trending (Computer) | 3,552 | 3,156 (−11%) | 3,486 | 3,106 (−11%) | no "1 report · 1 source" on single-source cards |
+| Search (微软 / Microsoft) | 1,658 | 1,548 (−7%) | 2,581 | 1,863 (−28%) | stories counted, not listed as Topics |
+| Event Detail | 1,169 | 1,169 | 1,153 | 1,153 | unchanged |
+
+Cards: Home 12 Trending + 9 Today + 15 ranking rows → 6 + 6 + 9 below 56rem (desktop unchanged:
+12 + 9 + 15, 2,508 px); Today 10 cards, average height 131 → 97 px, first card 574 → 524 px;
+Search Story Topics for the audit queries 21 → 0 by default.
+
+### Changes made
+
+- Backend: `services/search.py` `exclude_stories` + `excluded_story_count` (`STORY_TYPE`);
+  `api/search.py` `stories=include|exclude` (default include; other values 422).
+- Frontend: `components/shared.tsx` (`Coverage`: counts only above one; `EventList` sources in
+  the metadata line, no separate source row, no "Multiple sources" tag), `app/globals.css` (Home
+  preview rule below 56rem; source text in the metadata line), `app/page.tsx` (section classes;
+  one page message when every section fails), `app/today/page.tsx` (domain heading visually
+  hidden), `app/search/page.tsx` (`stories=exclude`, story line and "Show them", Ranked stories
+  heading and unit), `lib/api.ts` (`excluded_story_count`), `lib/i18n.tsx` (unused string removed).
+
+### Rejected changes
+
+Smaller fonts or tighter line-height; a mobile endpoint or a different fetch size for phones
+(the same bounded data is fetched, fewer rows are rendered); horizontal carousels; deleting,
+merging, or relinking Subjects; a migration; fewer Today Events (still 10 → 30).
+
+### Files changed
+
+`backend/src/industry_intelligence/services/search.py`, `api/search.py`,
+`tests/integration/test_search_postgres.py`; `frontend/components/shared.tsx`,
+`app/page.tsx`, `app/today/page.tsx`, `app/search/page.tsx`, `app/globals.css`, `lib/api.ts`,
+`lib/i18n.tsx`; docs.
+
+### Migration
+
+None.
+
+### Tests
+
+`test_search_postgres.py` +1: a reusable Topic stays and a ranked story is only counted; an
+explicit `subject_type=event` returns it; the domain filter applies before counting; API
+`stories=exclude`, default unchanged, invalid value 422. Mobile preview limits are CSS (no
+frontend test framework); verified in the browser. pytest **886 passed, 1 skipped** (unit 660);
+Ruff clean; ESLint, TypeScript, build pass.
+
+### Performance
+
+HTTP requests unchanged: Home 6, Today 1 (+1 `/today` only when the secondary section opens),
+Search 4. Search statements fall because fewer items are hydrated: Microsoft 9 → 3, 华为 19 → 1,
+Bitcoin 7 → 7. No new endpoint.
+
+### Browser verification (isolated build 3090 / API 8090, live DB)
+
+375 px zh-CN and English: `/`, `/today`, `/trending`, `/search`, Event Detail — no horizontal
+overflow; Home keeps all four sections and every "View …" link; Today Finance "Market Pulse"
+requested only when opened (4 lists). Search: 微软 → Events 15 + Companies (Microsoft); 英伟达 →
+Events 8, Topics (story line "另有 1 篇…") and Companies (英伟达), "查看" → `subject_type=event`,
+Ranked stories 1, Topic filters open; 比特币 → Events 1 + Topic 比特币; PMI → Events 1;
+Mate 90 → Events 4 + story line (5). 1280 px English: Home 12 + 9 + 15 (unchanged), Today Gaming
+10 cards, Search NVIDIA sections. Fresh tab console errors 0; API log GET only. API stopped:
+Home, Today, Trending, Search each show one message.
+
+### Known limitations
+
+- Event headline search is lexical and language-local (no translation).
+- Story Subjects whose article is not an Event remain reachable only through the story link or
+  the Story type filter.
+- The Home mobile limit is presentation (CSS); the full preview is still fetched.
+- `eastmoney_turnover` fails upstream (HTTP 502), outside Trending.
+
+### Next step
+
+Stop polishing; observe a few daily runs. No further feature is needed for these two issues.

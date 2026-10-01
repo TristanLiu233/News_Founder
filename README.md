@@ -146,7 +146,7 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 | `/` | Daily overview (Product-2): Trending Events per domain (the first four of the `/trending` order, publisher ranks as published, one persisted summary each — AI Summary, else a publisher excerpt, else none), New Today (the three newest Events per domain), live External Company Rankings shown as published, and Explore (Companies, Search); every section links to its page; nothing is generated on a page load | 4 Trending + 3 Today Events per domain, Top 5 per ranking |
 | `/today` | Discover · Today (Product-2): what is new — the newest canonical Events of one domain, latest report first, from reports published in the 24 hours before the latest collection; each source's own lists (Computer/Gaming) or Market Pulse (Finance) in a collapsed section | 10 Events, up to 30 |
 | `/trending` | Discover · Trending: Event cards for the domain's publisher ranked article lists. Combined (default, Trending-3): current Events placed by their best publisher rank, with a small lift for Events that more than one publisher lists; By publisher list (`?view=native`): each list in its publisher's order with same-list movement (↑3, ↓2, —, NEW; Trending-2). Each card shows the headline (→ Event Detail), every publisher rank exactly as published (e.g. "Gematsu · Popular Posts #2"), time, report/source counts, and Topics; lists shown with their stated window and observation time; no platform score or position number | 20 events, expandable to 50 |
-| `/search` | Discover · Search (Product-2): Events (headline match, newest first), Topics (multilingual Subject search with domain tabs; type, source, and language under Topic filters), and Companies (names and aliases, e.g. 微软 → Microsoft) in separate sections | 5 Events, 20 Topics per page, 5 Companies |
+| `/search` | Discover · Search (Product-2): Events (headline match, newest first), Topics (multilingual Subject search with domain tabs; type, source, and language under Topic filters; one-article ranked stories are counted with a "Show them" link instead of listed as topics), and Companies (names and aliases, e.g. 微软 → Microsoft) in separate sections | 5 Events, 20 Topics per page, 5 Companies |
 | `/subject/{id}` | Topic (Subject) Detail: current rank and trend, related Events (hidden when none), rank history, where it appears (source lists), related news collapsed (the same reports are grouped under related Events), aliases, and a collapsed Methodology note (score, observations, link rules) | 20 lists, 10 news per page, 5 related Events |
 | `/rankings` | External company rankings per domain: ranking selector (only rankings with a collected snapshot; a direct link still opens a never-collected one), one-line publisher/metric/date/coverage/original-source meta and disclaimer, a collapsed About this ranking note (cadence, acquisition, observed time, source column and description), latest snapshot table with movement, dropped entries, company names linking to Company Detail, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
 | `/companies` | Company directory with company search (names, aliases, legal/localized names, identifiers), domain filter, and profile availability; separate from Subject search | 30 per page, previous/next |
@@ -1196,3 +1196,12 @@ The implementation record and live verification are in `DEVELOPMENT.md`.
 - **Event** — what happened and the sources: the reports with publisher excerpts come first; AI
   text appears only when a checked summary exists and is labelled AI-generated.
 - **Rankings / Companies** — external company rankings, shown as published.
+
+## Product-2.1 — Search and phone reading
+
+- Search Topics are reusable subjects (games, assets, repositories). A single article that a
+  source ranking listed (a "ranked story") is no longer shown as a topic; the page says how many
+  matched and offers "Show them". The article itself is found under Events when it is one.
+- On phones, Home shows the first two Trending and two New Today events and three rows per
+  ranking per domain card, each with its "View …" link; event cards use one metadata line and
+  show report/source counts only when there is more than one.

@@ -12,6 +12,12 @@ from industry_intelligence.services.resolution import display_names, normalize_s
 
 logger = logging.getLogger(__name__)
 
+# Product-2.1: ranked-story Subjects (``SubjectType.EVENT``: one listed article of a ranking
+# source such as Hacker News Top Stories, IT之家 日榜, or 虎嗅 48小时热文) are not reusable
+# Topics. With ``exclude_stories`` they are left out of Topic results and only counted
+# (``excluded_story_count``); an explicit ``subject_type="event"`` filter still returns them.
+STORY_TYPE = "event"
+
 
 def normalize_search_query(value):
     return normalize_subject_name(value)
@@ -107,6 +113,7 @@ def search(
     offset=0,
     locale="en",
     provider=None,
+    exclude_stories=False,
 ):
     started = perf_counter()
     q = normalize_search_query(query)
@@ -184,6 +191,12 @@ def search(
         # Preserve lexical tier/rank ordering including exact-match ties.
         ranked.sort(key=lambda row: row["lexical_rank"])
     fusion_ms = (perf_counter() - fusion_start) * 1000
+    excluded_stories = 0
+    if exclude_stories and subject_type is None:
+        # Structural filter on the persisted Subject type only (never on names or titles).
+        kept = [row for row in ranked if row["subject_type"] != STORY_TYPE]
+        excluded_stories = len(ranked) - len(kept)
+        ranked = kept
     page = ranked[offset : offset + limit]
     items = []
     for rank, row in enumerate(page, offset + 1):
@@ -244,6 +257,7 @@ def search(
         mode_used=used,
         semantic_search_available=available,
         total=len(ranked),
+        excluded_story_count=excluded_stories,
         limit=limit,
         offset=offset,
         items=items,

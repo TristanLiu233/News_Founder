@@ -18,7 +18,9 @@ import { common, formatDateTime, useLocale, type Locale } from "../lib/i18n";
  * 2. Today — what is new (the /today read model, newest 3 Events per domain).
  * 3. External company rankings (Top 5 each), then Explore (Companies, Search).
  * Home composes existing read APIs only: nothing is scored, ranked, or generated here, and no
- * request triggers ingestion or AI.
+ * request triggers ingestion or AI. Product-2.1: when the cards stack into one column (below 56rem)
+ * CSS shows the first 2 Trending, 2 Today, and 3 ranking rows per card — the same fetched data,
+ * fewer rows rendered — and every card keeps its link to the full page.
  */
 const TRENDING_TOP = 4;
 const TODAY_PER_DOMAIN = 3;
@@ -175,11 +177,15 @@ export default function Home() {
   const rankings = useLoad<RankingCardData[]>(loadRankings);
   const t = copy[locale];
   const c = common[locale];
+  // One concise message when the API is unreachable for every section (Product-2.1); a single failing
+  // section still only marks itself.
+  const unavailable = [trending, todayEvents, rankings].every(state => state.status === "error");
   return <main><div className="shell">
     <header className="dashboard-header">
       <h1>{t.title}</h1>
       <p className="intro">{t.intro}</p>
     </header>
+    {unavailable ? <p role="alert" className="notice error">{c.unavailable}</p> : <>
 
     <section className="home-hero" aria-labelledby="home-trending">
       <SectionHeader id="home-trending" title={t.trending} link="/trending" linkText={t.viewTrending}/>
@@ -197,7 +203,7 @@ export default function Home() {
       </SectionState>
     </section>
 
-    <section aria-labelledby="home-today">
+    <section className="home-today" aria-labelledby="home-today">
       <SectionHeader id="home-today" title={t.today} link="/today" linkText={t.viewToday}/>
       <p className="section-note">{t.todayNote}</p>
       <SectionState state={todayEvents} locale={locale}>
@@ -212,7 +218,7 @@ export default function Home() {
       </SectionState>
     </section>
 
-    <section aria-labelledby="home-rankings">
+    <section className="home-rankings" aria-labelledby="home-rankings">
       <SectionHeader id="home-rankings" title={t.rankings} link="/rankings" linkText={t.viewRankings}/>
       <p className="section-note">{t.rankingsNote}</p>
       <SectionState state={rankings} locale={locale}>
@@ -231,5 +237,6 @@ export default function Home() {
         <SearchEntry locale={locale}/>
       </div>
     </section>
+    </>}
   </div></main>;
 }

@@ -149,6 +149,8 @@ export interface SearchResult {
 }
 export interface SearchResponse {
   items: SearchResult[]; total: number; offset: number; limit: number;
+  /** Product-2.1 (`stories=exclude`): ranked-story Subjects left out of Topic results, only counted. */
+  excluded_story_count?: number;
   mode_used: string; semantic_search_available: boolean;
 }
 

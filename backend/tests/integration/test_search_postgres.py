@@ -301,3 +301,56 @@ def test_stale_vectors_excluded_and_search_has_no_indexing_side_effect(db, corpu
     assert before == after
     assert result["mode_used"] == "lexical"
     assert not result["semantic_search_available"]
+
+
+def _story(db, title, domain=Domain.COMPUTER):
+    """A ranked-story Subject (``SubjectType.EVENT``), as ranking sources create them."""
+
+    story = Subject(
+        domain=domain, subject_type=SubjectType.EVENT, canonical_name=str(uuid4()), title=title
+    )
+    db.add(story)
+    db.flush()
+    refresh_subject(db, story.id)
+    return story
+
+
+def test_topic_results_can_leave_out_ranked_stories_structurally(db, corpus):
+    story = _story(db, "NVIDIA ships a new accelerator board")
+    game_story = _story(db, "DOOM sequel announced at showcase", Domain.GAMING)
+    settings = get_settings()
+    everything = search(db, settings, "NVIDIA")
+    assert {item["subject_id"] for item in everything["items"]} >= {
+        str(corpus["NVIDIA"].id),
+        str(story.id),
+    }
+    assert everything["excluded_story_count"] == 0
+    topics = search(db, settings, "NVIDIA", exclude_stories=True)
+    # The reusable Topic stays; the one-article story is only counted (persisted type).
+    assert [item["subject_id"] for item in topics["items"]] == [str(corpus["NVIDIA"].id)]
+    assert topics["total"] == 1 and topics["excluded_story_count"] == 1
+    # Asked for by type, the story is still found: nothing is lost, only not presented as a Topic.
+    stories = search(db, settings, "NVIDIA", subject_type="event", exclude_stories=True)
+    assert [item["subject_id"] for item in stories["items"]] == [str(story.id)]
+    assert stories["excluded_story_count"] == 0
+    # The domain filter still applies before counting.
+    gaming = search(db, settings, "DOOM", domain="gaming", exclude_stories=True)
+    assert str(game_story.id) not in {item["subject_id"] for item in gaming["items"]}
+    assert {item["subject_type"] for item in gaming["items"]} == {"game"}
+    assert gaming["excluded_story_count"] == 1
+    assert (
+        search(db, settings, "NVIDIA", domain="gaming", exclude_stories=True)[
+            "excluded_story_count"
+        ]
+        == 0
+    )
+    app = create_app(settings)
+    app.dependency_overrides[get_db_session] = lambda: db
+    with TestClient(app) as client:
+        body = client.get("/api/v1/search", params={"q": "NVIDIA", "stories": "exclude"}).json()
+        assert body["total"] == 1 and body["excluded_story_count"] == 1
+        default = client.get("/api/v1/search", params={"q": "NVIDIA"}).json()
+        assert default["excluded_story_count"] == 0 and default["total"] == 2
+        assert (
+            client.get("/api/v1/search", params={"q": "NVIDIA", "stories": "x"}).status_code == 422
+        )

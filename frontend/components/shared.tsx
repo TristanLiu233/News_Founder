@@ -50,8 +50,7 @@ export function TrendingEventCard({ item, locale, compact = false, showSummary =
     {item.native_list_count > 1 && <p className="multi-list">{t.onLists(item.native_list_count, item.native_publisher_count)}</p>}
     <p className="meta">
       <span>{t.lastReported} <time dateTime={event.time.last_published_at}>{formatDateTime(event.time.last_published_at, locale)}</time></span>
-      <span>{t.reports(event.content_count)}</span>
-      <span>{t.sources(event.source_count)}</span>
+      <Coverage event={event} locale={locale}/>
     </p>
     {!compact && item.topics.length > 0 && <ul className="chips event-entities" aria-label={t.relatedTopics}>
       {item.topics.map(topic => <li key={topic.id}><Link href={`/subject/${topic.id}`}>{topic.display_names[locale]}</Link> <small>{t.subjectTag}</small></li>)}
@@ -143,8 +142,21 @@ export function PageState({ loading, error, locale }: { loading: boolean; error?
 }
 
 /**
- * Canonical Events as compact rows: title, latest-report time (the list order), coverage, type, and a few entities.
- * `compact` (Home) keeps title, domain, type, time, and coverage only, with a plain "Multiple sources" cue.
+ * Report and source counts only when there is more than one (Product-2.1): "1 report · 1 source" on
+ * every single-source card repeated what the source name already says.
+ */
+function Coverage({ event, locale }: { event: EventSummary; locale: Locale }) {
+  const t = common[locale];
+  return <>
+    {event.content_count > 1 && <span>{t.reports(event.content_count)}</span>}
+    {event.source_count > 1 && <span>{t.sources(event.source_count)}</span>}
+  </>;
+}
+
+/**
+ * Canonical Events as compact rows: title, then one metadata line — latest-report time (the list order),
+ * the reporting sources, domain when mixed, coverage when above one, non-general type — and, outside
+ * `compact` (Home), a few linked entities.
  */
 export function EventList({ items, locale, showDomain = false, compact = false }: { items: EventSummary[]; locale: Locale; showDomain?: boolean; compact?: boolean }) {
   const t = common[locale];
@@ -152,13 +164,12 @@ export function EventList({ items, locale, showDomain = false, compact = false }
     <Link className="event-title" href={`/event/${event.id}`} lang={event.title_language}>{event.canonical_title}</Link>
     <p className="meta">
       <span>{t.lastReported} <time dateTime={event.time.last_published_at}>{formatDateTime(event.time.last_published_at, locale)}</time></span>
+      <span className="event-sources">{event.sources.map(source => source.name).join(" · ")}{event.source_count > event.sources.length && " …"}</span>
       {showDomain && <span>{t.shortDomains[event.domain]}</span>}
-      <span>{t.reports(event.content_count)}</span>
-      <span>{t.sources(event.source_count)}</span>
-      {compact && event.source_count > 1 && <span className="tag current">{t.multipleSources}</span>}
+      <Coverage event={event} locale={locale}/>
       {event.event_type !== "general" && <span className="tag">{t.eventTypes[event.event_type] ?? event.event_type}</span>}
     </p>
-    {!compact && <><p className="event-sources">{event.sources.map(source => source.name).join(" · ")}{event.source_count > event.sources.length && " …"}</p>
+    {!compact && <>
     {(event.subjects.length > 0 || event.companies.length > 0) && <ul className="chips event-entities">
       {event.subjects.map(subject => <li key={`s-${subject.id}`}><Link href={`/subject/${subject.id}`}>{subject.display_names[locale]}</Link> <small>{t.subjectTag}</small></li>)}
       {event.companies.map(company => <li key={`c-${company.id}`}><Link href={`/company/${company.id}`}>{company.display_names[locale]}</Link> <small>{t.companyTag}</small></li>)}

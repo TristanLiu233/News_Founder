@@ -11,9 +11,11 @@ const EVENT_LIMIT = 5;
 const COMPANY_LIMIT = 5;
 const labels = {
   en: {eyebrow: "Discover", title: "Search", intro: "Find events by headline, and topics and companies by name in English or Chinese.", query: "Search query", placeholder: "Headline, company, game, coin or repository…", search: "Search", moreFilters: "Topic filters", activeFilters: (count: number) => `(${count} active)`, subject_type: "Topic type", source: "Source", language: "Content language", all: "All", loading: "Searching…", empty: "No events, topics or companies match this search.", error: "Search failed. Please try again.", sectionError: "This part of the results could not be loaded.", initial: "Enter at least two characters.", count: (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`, previous: "Previous", next: "Next", match: "Matched on", latest: "Latest observed rank", matches: {canonical_name: "Name", alias: "Other name", source_title: "Recent headline", semantic: "Similar meaning"}, languages: {en: "English", "zh-CN": "Chinese"},
-    events: "Events", eventsNote: "Headline matches, most recently reported first.", moreEvents: (shown: number, total: number) => `Showing ${shown} of ${total} matching events.`, event: ["event", "events"], topics: "Topics", topic: ["topic", "topics"], companies: "Companies", company: ["company", "companies"], inRankings: (count: number) => `In ${count} external ${count === 1 ? "ranking" : "rankings"}`, profiled: "Profile available"},
+    events: "Events", eventsNote: "Headline matches, most recently reported first.", moreEvents: (shown: number, total: number) => `Showing ${shown} of ${total} matching events.`, event: ["event", "events"], topics: "Topics", topic: ["topic", "topics"], companies: "Companies", company: ["company", "companies"], inRankings: (count: number) => `In ${count} external ${count === 1 ? "ranking" : "rankings"}`, profiled: "Profile available",
+    stories: "Ranked stories", storyUnit: ["story", "stories"], storiesMatch: (count: number) => `${count} ${count === 1 ? "story" : "stories"} from source rankings (one listed article each, not a topic) also ${count === 1 ? "matches" : "match"}.`, showStories: "Show them"},
   "zh-CN": {eyebrow: "发现", title: "搜索", intro: "按标题查找事件，按中英文名称查找主题与公司。", query: "搜索关键词", placeholder: "标题、公司、游戏、加密货币或代码仓库…", search: "搜索", moreFilters: "主题筛选", activeFilters: (count: number) => `（已启用 ${count} 项）`, subject_type: "主题类型", source: "来源", language: "内容语言", all: "全部", loading: "搜索中…", empty: "没有匹配的事件、主题或公司。", error: "搜索失败，请重试。", sectionError: "这部分结果暂时无法加载。", initial: "请输入至少两个字符。", count: (count: number) => `${count} 个`, previous: "上一页", next: "下一页", match: "匹配", latest: "最近观测排名", matches: {canonical_name: "名称", alias: "别名", source_title: "近期标题", semantic: "含义相近"}, languages: {en: "英文", "zh-CN": "中文"},
-    events: "事件", eventsNote: "标题匹配，按最近报道时间由新到旧。", moreEvents: (shown: number, total: number) => `显示 ${shown} / ${total} 个匹配事件。`, event: ["", ""], topics: "主题", topic: ["", ""], companies: "公司", company: ["", ""], inRankings: (count: number) => `出现在 ${count} 个外部排行榜`, profiled: "有公司资料"},
+    events: "事件", eventsNote: "标题匹配，按最近报道时间由新到旧。", moreEvents: (shown: number, total: number) => `显示 ${shown} / ${total} 个匹配事件。`, event: ["", ""], topics: "主题", topic: ["", ""], companies: "公司", company: ["", ""], inRankings: (count: number) => `出现在 ${count} 个外部排行榜`, profiled: "有公司资料",
+    stories: "榜单文章", storyUnit: ["", ""], storiesMatch: (count: number) => `另有 ${count} 篇来源榜单上的文章（单篇上榜文章，不是主题）也匹配。`, showStories: "查看"},
 };
 /** `mode` has no control: the backend default is used, and a `mode` from an older URL is passed through unchanged. */
 const emptyForm = {q: "", domain: "", subject_type: "", source: "", language: "", mode: ""};
@@ -64,6 +66,8 @@ export default function SearchPage() {
     const controller = new AbortController();
     setLoading(true); setError(false); setData(undefined); setEvents(undefined); setCompanies(undefined);
     const params = new URLSearchParams(submitted); params.set("locale", locale);
+    // Topics are reusable subjects: ranked-story Subjects are only counted unless asked for by type.
+    if (!params.get("subject_type")) params.set("stories", "exclude");
     const q = params.get("q") ?? "";
     const scope = isDomain(params.get("domain")) ? params.get("domain") as Domain : undefined;
     // Three separate lookups, each shown in its own section; one failing never hides the others.
@@ -97,6 +101,11 @@ export default function SearchPage() {
     const params = formParams(next);
     if (next.q.trim().length >= 2) navigate(params);
     else { window.history.pushState(null, "", params.toString() ? `/search?${params}` : "/search"); setSubmitted(null); setData(undefined); }
+  }
+  /** The same query with Topic type = Story: the ranked stories that were only counted. */
+  function showStories() {
+    const next = {...form, subject_type: "event"};
+    setForm(next); setFiltersOpen(true); navigate(formParams(next));
   }
   function paginate(offset: number) {
     const params = new URLSearchParams(submitted ?? ""); params.set("offset", String(offset)); navigate(params);
@@ -132,7 +141,7 @@ export default function SearchPage() {
       {!submitted && <p className="notice">{t.initial}</p>}
       {loading && <p className="notice">{t.loading}</p>}
       {error && <p role="alert" className="notice error">{t.error}</p>}
-      {data && events !== undefined && companies !== undefined && data.total === 0 && !events?.total && !companies?.total && <p className="notice">{t.empty}</p>}
+      {data && events !== undefined && companies !== undefined && data.total === 0 && !data.excluded_story_count && !events?.total && !companies?.total && <p className="notice">{t.empty}</p>}
       {events === null && !error && <p role="alert" className="notice error">{t.sectionError}</p>}
       {events && events.items.length > 0 && <section className="detail-section" aria-labelledby="search-events">
         <h2 id="search-events" className="section-title">{t.events} <span className="section-count">{t.count(events.total, ...t.event as [string, string])}</span></h2>
@@ -140,8 +149,9 @@ export default function SearchPage() {
         <article className="ranking-card"><EventList items={events.items} locale={locale} showDomain={!domain} compact/></article>
         {events.total > events.items.length && <p className="section-note">{t.moreEvents(events.items.length, events.total)}</p>}
       </section>}
-      {data && data.items.length > 0 && <section className="detail-section" aria-labelledby="search-topics">
-        <h2 id="search-topics" className="section-title">{t.topics} <span className="section-count">{t.count(data.total, ...t.topic as [string, string])}</span></h2>
+      {data && (data.items.length > 0 || Boolean(data.excluded_story_count)) && <section className="detail-section" aria-labelledby="search-topics">
+        <h2 id="search-topics" className="section-title">{form.subject_type === "event" ? t.stories : t.topics}{data.items.length > 0 && <> <span className="section-count">{t.count(data.total, ...(form.subject_type === "event" ? t.storyUnit : t.topic) as [string, string])}</span></>}</h2>
+        {Boolean(data.excluded_story_count) && <p className="section-note">{t.storiesMatch(data.excluded_story_count ?? 0)} <button type="button" className="link-button" onClick={showStories}>{t.showStories}</button></p>}
         {data.items.map(item => <article className="ranking-card search-result" key={item.subject_id}><h3><Link href={`/subject/${item.subject_id}`} className="subject-link">{item.display_name}</Link></h3><p>{c.shortDomains[item.domain]} · {c.subjectTypes[item.subject_type] ?? item.subject_type}</p><p>{t.match}{locale === "zh-CN" ? "：" : ": "}{t.matches[item.matched_on as keyof typeof t.matches] ?? item.matched_on}{item.matched_alias && ` · ${item.matched_alias}`}</p>{item.recent_title && <p>{item.recent_title}</p>}<p className="result-sources">{item.latest_sources.map(s => `${s.source} · ${t.latest} #${s.latest_rank} (${new Date(s.latest_observed_at).toLocaleDateString(locale)})`).join(" / ")}</p></article>)}
         {data.total > data.limit && <div className="pagination"><button disabled={data.offset === 0} onClick={() => paginate(Math.max(0, data.offset-data.limit))}>{t.previous}</button><button disabled={data.offset + data.limit >= data.total} onClick={() => paginate(data.offset+data.limit)}>{t.next}</button></div>}
       </section>}

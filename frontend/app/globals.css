@@ -223,7 +223,7 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .event-title { color: #17201c; font-weight: 700; text-decoration: none; overflow-wrap: anywhere; }
 .event-title:hover { color: #087f5b; text-decoration: underline; }
 .event-list .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .75rem; font-size: .8rem; }
-.event-sources { margin: .25rem 0 0; color: #87908a; font-size: .76rem; }
+.event-sources { margin: 0; color: #5f665f; }
 .event-entities { margin-top: .5rem; }
 .event-entities li { padding: .15rem .5rem; font-size: .8rem; }
 /* Trending: Event cards with each publisher's own rank as evidence (no platform position). */
@@ -337,3 +337,10 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 /* Product-2: publisher excerpts in the Event timeline, and Search result sections. */
 .timeline-excerpt { margin: .3rem 0 0; color: #3d443f; font-size: .88rem; line-height: 1.5; overflow-wrap: anywhere; }
 .search-result h3 { margin: 0 0 .25rem; font-size: 1.05rem; overflow-wrap: anywhere; }
+/* Product-2.1: when Home cards stack into one column, each preview shows its first items only (same data,
+   fewer rows rendered); every card keeps its "View …" link to the full page. */
+@media (max-width: 55.99rem) {
+  .home-hero .trending-events > li:nth-child(n+3),
+  .home-today .event-list > li:nth-child(n+3),
+  .home-rankings .ranking-list > li:nth-child(n+4) { display: none; }
+}
