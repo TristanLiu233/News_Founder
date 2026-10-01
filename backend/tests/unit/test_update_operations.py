@@ -217,12 +217,20 @@ def test_health_text_is_compact():
             "degraded": 0,
             "failing": 1,
             "never_run": 0,
+            "trending_lists": {
+                "sources": 1,
+                "healthy": 1,
+                "degraded": 0,
+                "failing": 0,
+                "never_run": 0,
+            },
         },
         "update": {"lock": "free", "recent_runs": []},
         "sources": [
             {
                 "source": "gematsu",
                 "kind": "content",
+                "trending": True,
                 "health": "healthy",
                 "last_success_at": "2026-09-30T01:02:03+00:00",
                 "consecutive_failures": 0,
@@ -232,6 +240,7 @@ def test_health_text_is_compact():
             {
                 "source": "down",
                 "kind": "ranking",
+                "trending": False,
                 "health": "failing",
                 "last_success_at": None,
                 "consecutive_failures": 2,
@@ -242,6 +251,9 @@ def test_health_text_is_compact():
     }
     text = render_text(report)
     assert "healthy 1, degraded 0, failing 1, never_run 0" in text
+    # A failing source Trending does not read never shows as a Trending-list failure.
+    assert "Trending lists (1 publisher ranked lists: healthy 1, degraded 0, failing 0" in text
+    assert "content (trending)" in text and "ranking (trending)" not in text
     assert "Update lock: free · no recorded run" in text
     assert "2026-09-30 01:02Z" in text and "2/2  transport: http_status 503" in text
 

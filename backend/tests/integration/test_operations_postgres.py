@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from industry_intelligence.adapters.source.base import ContentSourceItem, SourceItem
 from industry_intelligence.adapters.source.content_registry import (
     CONTENT_SOURCES,
+    NEWS_RANKINGS,
     ContentSourceDefinition,
 )
 from industry_intelligence.adapters.source.registry import SOURCES, SourceDefinition
@@ -611,6 +612,7 @@ def test_source_health_is_read_only_and_deterministic(db, factory, settings, reg
     assert set(first["sources"][0]) == {
         "source",
         "kind",
+        "trending",
         "health",
         "last_attempt_at",
         "last_outcome",
@@ -633,3 +635,7 @@ def test_source_health_runs_inside_a_read_only_transaction(settings):
         session.rollback()
     engine.dispose()
     assert report["summary"]["sources"] == len(report["sources"]) > 0
+    # Source-1: Trending lists are counted apart from sources Trending does not read.
+    trending_rows = [row for row in report["sources"] if row["trending"]]
+    assert report["summary"]["trending_lists"]["sources"] == len(trending_rows) > 0
+    assert {row["source"] for row in trending_rows} <= set(NEWS_RANKINGS)

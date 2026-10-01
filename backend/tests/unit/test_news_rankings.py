@@ -182,10 +182,13 @@ def test_registry_is_a_feed_mode_of_existing_publishers():
         "gematsu_popular",
         "game_3dm_hot",
         "hacker_news_top",
+        "ithome_daily",
     ]
     assert not set(NEWS_RANKINGS) & set(CONTENT_SOURCES)
     names = {definition.name for definition in NEWS_RANKINGS.values()}
-    assert names == {"新浪财经", "东方财富", "Gematsu", "3DM", "Hacker News"}
+    assert names == {"新浪财经", "东方财富", "Gematsu", "3DM", "Hacker News", "IT之家"}
+    # IT之家 is the existing publisher of the IT之家 feed and the 日榜 Subject ranking.
+    assert CONTENT_SOURCES["ithome_news"].name == NEWS_RANKINGS["ithome_daily"].name
     # 东方财富 is the existing publisher of the 7×24 feed: one Source, a second feed mode.
     assert CONTENT_SOURCES["eastmoney_news"].name == NEWS_RANKINGS["eastmoney_click_rank"].name
     assert NEWS_RANKINGS["sina_finance_hot"].domain == Domain.FINANCE
@@ -344,6 +347,7 @@ def test_list_semantics_are_the_publishers_own():
         "gematsu_popular": ("popular_posts", "Popular Posts", "popular"),
         "game_3dm_hot": ("recent_hot", "近期热门", "hot"),
         "hacker_news_top": ("top_stories", "Top Stories", "top"),
+        "ithome_daily": ("daily", "日榜", "hot"),
     }
     for values in semantics.values():
         text = " ".join(values).lower()

@@ -21,6 +21,7 @@ from industry_intelligence.adapters.source.news_rankings import (
     Game3DMHotAdapter,
     GematsuPopularAdapter,
     HackerNewsTopContentAdapter,
+    ITHomeDailyContentAdapter,
     SinaFinanceHotAdapter,
 )
 from industry_intelligence.domain.enums import ContentType, Domain
@@ -236,6 +237,21 @@ NEWS_RANKINGS = {
             "API",
             "en",
             reuse_ranking="hacker_news",
+        ),
+        # Source-1: the 日榜 the IT之家 Subject ranking already reads (same page, one request per
+        # run); articles are stored under the IT之家 feed's GUID so feed and list share one row.
+        NewsRankingDefinition(
+            "ithome_daily",
+            "IT之家",
+            Domain.COMPUTER,
+            "daily",
+            "日榜",
+            "hot",
+            ITHomeDailyContentAdapter.page_url,
+            ITHomeDailyContentAdapter,
+            "HTML",
+            "zh-CN",
+            reuse_ranking="ithome",
         ),
     )
 }

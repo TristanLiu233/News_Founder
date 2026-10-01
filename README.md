@@ -1054,6 +1054,7 @@ ranked list of articles:
 | `gematsu_popular` | Gematsu · Popular Posts | publisher order |
 | `game_3dm_hot` | 3DM · 近期热门 | publisher order |
 | `hacker_news_top` | Hacker News · Top Stories | HN position, points |
+| `ithome_daily` | IT之家 · 日榜 (Source-1) | publisher order; no period stated (rows are the previous day's articles); same articles as the IT之家 feed |
 
 ```
 publisher ranked list → ContentItem (same Source as the publisher's feed)
@@ -1166,3 +1167,17 @@ The implementation record and live verification are in `DEVELOPMENT.md`.
   including older listed Events, with the same-list movement badges of Trending-2.
 - No migration; the order is computed on read from stored list snapshots. The implementation
   record and live examples are in `DEVELOPMENT.md`.
+
+## Source-1 — Curated Trending sources
+
+- Trending lists now: Computer — Hacker News Top Stories, IT之家 日榜; Finance — 新浪财经
+  点击量排行, 东方财富 网友点击排行榜; Gaming — Gematsu Popular Posts, 3DM 近期热门.
+- IT之家 日榜 is read from the same page the daily IT之家 ranking already fetches (no extra list
+  request) and its articles are the same records as the IT之家 feed, so nothing is duplicated.
+- Sources are chosen for quality, not count: a list must be the publisher's own popularity
+  ranking of news articles, current, fetchable without workarounds, and add Events or publisher
+  diversity. Candidates that failed (stale, sponsored rows, robots restrictions, commentary rather
+  than news, or duplicating an existing publisher's stories) are recorded in `DEVELOPMENT.md`
+  and are not enabled.
+- `source-health` shows a separate "Trending lists" line, so a failure in a source Trending does
+  not read (e.g. a Market Pulse chart) is not a Trending failure.

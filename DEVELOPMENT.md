@@ -35,13 +35,13 @@ planned or speculative results in a finished entry.
 ## Current Baseline
 
 - Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1, Product-1, Trending-2,
-  Trending-3).
-- Backend: pytest 875 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
-  `industry_intelligence_test`; unit 654; Ruff check and format check clean (after Trending-3).
+  Trending-3, Source-1).
+- Backend: pytest 882 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
+  `industry_intelligence_test`; unit 660; Ruff check and format check clean (after Source-1).
 - Frontend: ESLint, TypeScript, and the Next.js production build (11 routes) pass.
 - Live dev database: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health`
-  29/30 healthy after the Trending-3 run (`eastmoney_turnover` failed once with an upstream
-  network error; the five publisher ranked lists are healthy).
+  30/31 healthy and Trending lists 6/6 healthy after Source-1 (`eastmoney_turnover`, a Market
+  Pulse chart Trending does not read, fails with upstream HTTP 502 since 2026-09-30).
 - Local runtime: native PostgreSQL 16 (Local-1); daily launchd `intelligence-update --skip-ai`
   at 10:00 Australia/Sydney (bounded AI was enabled by Product-1 and rolled back by Product-1.1).
 
@@ -1329,3 +1329,172 @@ articles, for both views.
 
 Watch for the first live multi-publisher Event and check that its placement reads as intended;
 then consider whether Finance needs more native lists before any change to the constants.
+
+## 2026-10-01 — Source-1 — Curated Trending Source Coverage
+
+Status: complete (2026-10-01). No migration. One source accepted (IT之家 日榜, Computer); one
+implemented and rejected after live data (游民星空 热点资讯排行, Gaming). Aggregation unchanged.
+Scheduled AI stays `--skip-ai`; no provider request.
+
+### Goal
+
+Improve Trending input quality with at most one or two publisher-native hot/ranked article lists,
+chosen by semantics and incremental Event value rather than count, through the existing adapter →
+ContentItem → Event → aggregate pipeline.
+
+### Start state
+
+- Branch `phase-7` at `56ab4d8` (Trending-3), clean tree, no remote; Alembic current = head =
+  `20260930_12`; scheduler `AI_ARGS = ["--skip-ai"]`.
+- Baseline (actual): pytest **875 passed, 1 skipped**; Ruff check/format clean (182 files);
+  `data-quality-audit` 0 / 0 / 6 info; ESLint, TypeScript, Next.js build (11 routes) pass.
+- Today's scheduled run (`20261001T001043Z-014ec132`, started 10:10 local after wake) was
+  DEGRADED only by `eastmoney_turnover` (HTTP 502, 2 consecutive failures, a Market Pulse
+  chart); the five Trending lists were healthy.
+- Inventory: Computer — Hacker News Top Stories; Finance — 新浪财经 点击量排行, 东方财富 网友点击排行榜;
+  Gaming — Gematsu Popular Posts, 3DM 近期热门. Current eligible Events before ingestion: computer
+  28, finance 30, gaming 5 (3DM 近期热门 keeps multi-day posts: 7 of 12 Gaming rows older than 48 h).
+
+### Candidate research
+
+Discovery started from the publishers already fetched and from known tech/gaming/finance outlets;
+each was then checked live with the application's `HTTPClient` (honest User-Agent, robots.txt
+first, one page request per candidate, serially, 1 s apart; 9 robots files + 9 pages + 2 follow-up
+pages: the IT之家 日榜 page labels and one 游民星空 article page). The two lists already fetched daily
+as Subject rankings (IT之家 日榜, 虎嗅 48小时热文) were read from their stored snapshots.
+
+### Candidate audit table
+
+| Candidate | Domain | Native ranking? | Article/Event ranking? | Current enough? | Stable fetch? | Adds diversity? | Overlap risk | Decision |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| IT之家 · 日榜 (`m.ithome.com/rankm/`) | computer | yes — page tabs 日榜 / 周榜 / 热评 / 月榜, numbered rows | yes (news articles, 12) | yes — rows 21–34 h old | yes — already fetched daily by the `ithome` Subject ranking (0 new list requests) | Chinese tech ecosystem beside English HN | low with HN; 2/12 are rows the IT之家 feed already stored | **accept** |
+| 游民星空 · 热点资讯排行 (`gamersky.com/news/`) | gaming | yes — numbered 1–15 | yes | **no** — live 10/15 older than 48 h, #6 from 2022 | yes | second Chinese gaming list | low | implemented, **rejected after live data** (below) |
+| 虎嗅 · 48小时热文 | computer | yes — 48 h list | mostly commentary/society essays (房地产与汇率, 穷人的家庭…, 长蛋挞) | yes | yes (already fetched) | — | — | **reject**: semantics/domain fit — not computing events |
+| Lobsters · hottest | computer | yes | yes | yes | robots.txt disallows `hottest.json` for our client | — | high with HN | **reject**: robots disallow (not fetched) |
+| Hacker News · Best Stories | computer | yes | yes | — | yes | no — same publisher | high | **reject**: no publisher diversity (Product-1 audit) |
+| Ars Technica · Most Read | computer | yes — "Most Read lists the most popular stories on Ars", 5 | yes, all sections (NASA, obesity drug among 5) | likely | yes | English, same audience as HN | moderate with HN | **defer**: 2/5 off-domain; low incremental value next to HN |
+| TechCrunch · Most Popular | computer | yes — 7 | yes | **no** — all 3–7 days old (URLs dated 09-24 … 09-28 on 10-01) | yes | — | — | **reject**: stale (0/7 would pass 48 h) |
+| The Verge · Most Popular | computer | yes — 5 | slot #2 is a sponsored `/ad/` post | yes | generated class names | — | — | **reject**: sponsored entry inside the ranking; fragile markup |
+| 华尔街见闻 | finance | hot list not in the static page (SPA) | — | — | only via an undocumented JSON API | — | — | **defer**: Finance already has two lists |
+| CNBC · Trending Now | finance | rendered client-side (only CSS in the HTML) | — | — | no static list | English complement | — | **reject**: no fetchable native list |
+| GamesIndustry.biz homepage | gaming | no popularity block | — | — | — | — | — | **reject**: no native popularity signal |
+| VGC · Popular Now | gaming | yes — numbered 1–5 | yes | yes | yes (WordPress HTML) | English, new publisher | **high same-story overlap with Gematsu** (both list "Intergalactic fully revealed in 2027" under different headlines; the precision-first resolver keeps them as two Events = visible duplicate cards) | **defer** |
+
+Finance was audited and left unchanged: 新浪财经 + 东方财富 give 30 current Events and no candidate
+added a fetchable, current, news-ranking list.
+
+### Implementation
+
+- `adapters/source/news_rankings.py`: `ithome_guid` (news ID → the IT之家 RSS GUID / desktop URL,
+  `1008903` → `https://www.ithome.com/1/008/903.htm`), `ithome_ranked_entries`,
+  `parse_ithome_published` (`span.news-time`, Beijing time), `ITHomeDailyContentAdapter`
+  (`entries_from_observations` from the run's `ithome` snapshot; `fetch` fallback through the
+  existing `parse_ithome`; `article_details` reads the mobile page the 日榜 links to; 1 s spacing).
+- `content_registry.py`: `ithome_daily` (`IT之家`, computer, list `daily` / 日榜, kind `hot`, no
+  window, `reuse_ranking="ithome"`).
+- `services/news_ranking_ingestion.py`: the reuse path now completes publication times for listed
+  articles that are not stored yet and lack a date (bounded, serial, the adapter's delay); Hacker
+  News rows carry both, so HN still makes no extra request.
+- `services/source_health.py`: per-row `trending` flag, `summary.trending_lists` counts, a
+  "Trending lists (N publisher ranked lists: …)" line and `content (trending)` kind in the text, so
+  a failing source that Trending does not read is never reported as a Trending failure.
+- Article identity: ranked rows are stored under the feed's GUID (external ID and URL), never the
+  mobile URL, so the feed and the list share one ContentItem in either order (the feed's
+  `article_id` reads the same news ID back); `item_metadata.source_article_id` lets the existing
+  `same_article` linker attach the ranked-story Subject exactly as for feed rows. No title or fuzzy
+  matching; edited slugs cannot occur (numeric URLs).
+- Trending, API, Home, and frontend: unchanged; the new list flows through the generic model.
+
+### Rejected after live data: 游民星空 热点资讯排行
+
+Implemented (adapter, fixtures, unit and PostgreSQL tests) and ingested once. Live (09:21Z): 15
+ranked, 15 stored, 15 article lookups, 15 single-report Events, 0 unlinked, **10 of 15 older than
+48 h (67%)**, one 2022 article (#6, 33,391 h). Its 5 current rows were its #7, #8, #9, #11, #12, so
+in the unchanged aggregate order they all ranked below every Gematsu and 3DM entry (Gaming
+positions 6–10) and never reached Home's top 4. A multi-day list whose current signal sits in its
+lower half fails the "mostly stale" gate, so the definition, adapter, fixtures, and tests were
+removed. The 15 stored reports, their Events, the snapshot, and the attempt row stay as ordinary
+history (not read by Trending; `source-health` lists registered sources only).
+
+### Files changed
+
+`backend/src/industry_intelligence/adapters/source/news_rankings.py`, `content_registry.py`,
+`services/news_ranking_ingestion.py`, `services/source_health.py`; tests: new
+`tests/unit/test_source1_rankings.py`, `tests/integration/test_source1_postgres.py`, fixtures
+`tests/fixtures/ithome_daily_live.html`, `ithome_article_mobile.html` (trimmed live captures);
+updated `test_news_rankings.py`, `test_update_operations.py`, `test_operations_postgres.py`.
+Docs: this entry, `AGENTS.md`, `CLAUDE.md`, `README.md`. Frontend unchanged.
+
+### Migration
+
+None (the generic `IngestionBatch` news-ranking snapshot holds publisher, list, native rank,
+observation time).
+
+### Tests
+
+- `test_source1_rankings.py` (6): GUID ↔ news ID both ways; 日榜 entries keep the printed rank and
+  are stored under the GUID (never the mobile URL), only the 日榜 block is read; rows without a
+  readable ID, title, or positive rank dropped without renumbering; entries from the stored
+  ranking snapshot; article time in Beijing time from the mobile page (relative "昨日" refused),
+  adapter request shape; reuse and lookup only for new dateless rows.
+- `test_source1_postgres.py` (1): real `HTTPClient` + counting mock — the 日榜 page once per run,
+  11 article pages (the feed already stored #1), #1 resolves to the feed row unchanged, 12 rows,
+  0 mobile-URL rows, replay with no request, 12 Events via the existing builder, Trending shows
+  IT之家 · 日榜 #1–#12.
+- Source-health tests extended for the `trending` flag and counts.
+- Results: pytest **882 passed, 1 skipped** (unit 660); Ruff check/format clean (184 files);
+  frontend unchanged (ESLint, TypeScript, build pass at the start gate and again before commit).
+
+### Live ingestion
+
+Backup first (`pg_dump -Fc`, 35 table-data entries, mode 600). Run `20261001T092103Z-8effd1d1`
+(`intelligence-update --skip-ai --source ithome --source ithome_daily --source gamersky_hot_news`):
+**SUCCESS**; rankings 1/1 (`ithome`, 12 observations), content 2/2, 25 new ContentItems, 2 reused,
+0 invalid, 25 new Events, links unchanged, postcheck 0/0.
+
+- IT之家 日榜: HTTP — no list request (reused `ithome` snapshot `688c1630…`), 10 article pages 200;
+  12 parsed, 12 stored as entries (10 new rows, 2 the feed's existing rows), 0 duplicates, 12
+  unique Events (all new single-report Events), 0 unlinked, 12 `same_article` links to the
+  ranked-story Subjects (not Topics), stale 0/12, ages 21.1–33.5 h.
+
+### Overlap and value analysis
+
+- New Events not present in other Trending sources: 12/12. Events corroborated across publishers:
+  0 (no shared story between HN and IT之家 in this window; no exact-headline match is possible
+  across languages). Duplicate rate 0%; stale rate 0%.
+- Trending impact: Computer eligible 28 → 40 (native 42); Combined order interleaves the two
+  publishers by native rank (HN #1, IT之家 #1, HN #2, IT之家 #2, …); Home Computer shows HN #1, IT之家
+  #1, HN #2, IT之家 #2. Finance and Gaming unchanged (Gaming 5 eligible after the 游民星空 removal).
+- Did it improve Trending? Yes for Computer: a second, independent publisher ecosystem with 12
+  current Events per run at no extra list request. Content mixes consumer electronics, EVs, and
+  platform news as IT之家 publishes them (no title filtering).
+
+### Performance
+
+Statements per domain (dev DB, same data): before ingestion `/trending` 15 / 14 / 15, Home
+15 / 14 / 14; after (Computer now two lists) 15 / 14 / 15 and 15 / 14 / 14; native 15 / 14 / 15.
+No growth with the extra list (one windowed snapshot query covers all lists).
+
+### Browser verification
+
+Isolated production build on 3090 against the API on 8090 (live DB): `/trending` Computer at
+1280 px English — Combined interleaves HN/IT之家, 20 distinct Events, chips fit; By publisher list —
+HN #1–#30 then IT之家 #1–#12 with "first collection, no movement yet"; IT之家 headline →
+`/event/12df5375…` with the original `https://www.ithome.com/1/008/903.htm`; Home top 4 equals
+`/trending` top 4 in all three domains (API comparison); 375 px 简体中文 `/trending`, `/`, Event
+Detail: no horizontal overflow, chips within the viewport; console errors 0; API log GET only.
+
+### Known limitations
+
+- IT之家 日榜 lists the previous day's articles and states no period, so none is recorded; its
+  observation time follows the `ithome` Subject ranking of the same run.
+- Rows not yet in the feed cost one article-page request each (≤ 12 per run, usually fewer).
+- IT之家 covers EVs and consumer products; they are shown as published under Computer.
+- Gaming remains the weakest domain (Gematsu 4 + 3DM, whose list is mostly multi-day): VGC is the
+  best remaining candidate but would show the same stories as Gematsu as separate cards.
+- `eastmoney_turnover` (Market Pulse) is failing upstream (HTTP 502); Trending is unaffected.
+
+### Next step
+
+Stop source expansion. Computer 2, Finance 2, Gaming 2 lists; revisit Gaming only if a current,
+non-overlapping native list appears. Return to product polish.

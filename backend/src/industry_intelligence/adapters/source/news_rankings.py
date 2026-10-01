@@ -31,6 +31,7 @@ from industry_intelligence.adapters.source.base import (
     RankedContentItem,
     SourceItem,
 )
+from industry_intelligence.adapters.source.chinese import parse_ithome
 from industry_intelligence.adapters.source.finance_news import _clean, _time
 from industry_intelligence.adapters.source.hacker_news import HackerNewsAdapter
 from industry_intelligence.domain.enums import Domain
@@ -371,6 +372,115 @@ class Game3DMHotAdapter(NewsRankingAdapter):
     async def article_details(self, url):
         # The article number is already the list row's external ID.
         return ArticleDetails(parse_3dm_published((await self.http.get(url)).text))
+
+
+# --- IT之家 日榜 (Source-1) ----------------------------------------------------------------------
+
+ITHOME_MOBILE_ARTICLE = re.compile(r"^https?://m\.ithome\.com/html/(\d{7,})\.htm$")
+ITHOME_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})")
+ITHOME_ARTICLE_GUID = re.compile(r"^https?://www\.ithome\.com/(\d+)/(\d{3})/(\d{3})\.htm$")
+
+
+def ithome_guid(news_id):
+    """The IT之家 RSS GUID (and desktop URL) of a news ID: ``1008903`` →
+    ``https://www.ithome.com/1/008/903.htm``. The feed stores its rows under this GUID, so a
+    ranked article and the same feed article are one ContentItem (never a mobile-URL duplicate)."""
+
+    value = str(news_id)
+    if not value.isdigit() or len(value) < 7:
+        return None
+    return f"https://www.ithome.com/{value[:-6]}/{value[-6:-3]}/{value[-3:]}.htm"
+
+
+def ithome_ranked_entries(rows, observed_at):
+    """日榜 rows (``external_id`` = the ``data-news-id``, mobile ``url``, publisher ``rank``) as
+    ranked articles stored under the feed's GUID. Rows whose news ID cannot be read are dropped
+    (returned as the failed count). The comment count the list shows is not its ranking basis,
+    so no native value is recorded; the list states no period."""
+
+    entries, failed = [], 0
+    for row in rows:
+        match = ITHOME_MOBILE_ARTICLE.match(row.get("url") or "")
+        news_id = str(row.get("external_id") or (match.group(1) if match else ""))
+        guid = ithome_guid(news_id)
+        title = _clean(row.get("title"))
+        if not guid or not title or not isinstance(row.get("rank"), int) or row["rank"] < 1:
+            failed += 1
+            continue
+        entries.append(
+            RankedContentItem(
+                rank=row["rank"],
+                item=ContentSourceItem(
+                    external_id=guid,
+                    title=title,
+                    url=guid,
+                    published_at=None,
+                    observed_at=observed_at,
+                    language="zh-CN",
+                    # Same key as the feed rows: the deterministic linker's same-article rule.
+                    metadata={"source_article_id": news_id},
+                ),
+            )
+        )
+    return entries, failed
+
+
+def parse_ithome_published(html):
+    """The mobile article page's publication time (``span.news-time``, Beijing time), else None."""
+
+    soup = BeautifulSoup(html, "html.parser")
+    stamp = soup.select_one("span.news-time")
+    match = ITHOME_TIME.search(stamp.get_text(" ", strip=True)) if stamp else None
+    if not match:
+        return None
+    year, month, day, hour, minute = (int(value) for value in match.groups())
+    try:
+        local = datetime(year, month, day, hour, minute, tzinfo=BEIJING)
+    except ValueError:
+        return None
+    return local.astimezone(UTC)
+
+
+class ITHomeDailyContentAdapter(NewsRankingAdapter):
+    """IT之家 日榜, read through the existing Subject ranking (``ithome``).
+
+    In a daily run that ranking has already stored this run's 日榜 snapshot;
+    ``entries_from_observations`` builds the ranked articles from it, so the page is requested
+    once per run. ``fetch`` is the fallback when no snapshot of this run exists.
+    """
+
+    source_name = "IT之家"
+    domain = Domain.COMPUTER
+    language = "zh-CN"
+    page_url = "https://m.ithome.com/rankm/"
+    lookup_delay = 1.0
+    lookup_articles = True
+
+    @staticmethod
+    def entries_from_observations(observations):
+        rows = [
+            {"rank": row.rank, "title": row.title, "url": row.url, "external_id": None}
+            for row in observations
+            if row.title and row.url
+        ]
+        observed_at = observations[0].observed_at if observations else datetime.now(UTC)
+        return ithome_ranked_entries(rows, observed_at)[0]
+
+    async def fetch(self):
+        observed_at = datetime.now(UTC)
+        response = await self.http.get(self.page_url)
+        rows, failed = parse_ithome(response.text)
+        entries, dropped = ithome_ranked_entries(rows, observed_at)
+        self.failed_count = failed + dropped
+        return entries[: self.limit]
+
+    async def article_details(self, url):
+        # ``url`` is the GUID form; the time is read from the mobile page the 日榜 links to.
+        match = ITHOME_ARTICLE_GUID.match(url)
+        if not match:
+            return None
+        page = f"https://m.ithome.com/html/{''.join(match.groups())}.htm"
+        return ArticleDetails(parse_ithome_published((await self.http.get(page)).text))
 
 
 # --- Hacker News Top Stories --------------------------------------------------------------------

@@ -4,8 +4,8 @@ One run of a ``NEWS_RANKINGS`` definition:
 
 1. fetch the list (outside any transaction) — entries keep the publisher's own rank;
    — or, for a list that a Subject ranking of the same run already stored
-   (``reuse_ranking``, e.g. Hacker News Top Stories), build the entries from that stored
-   snapshot with no request at all;
+   (``reuse_ranking``, e.g. Hacker News Top Stories, IT之家 日榜), build the entries from that
+   stored snapshot without requesting the list again;
 2. for listed articles whose URL is not stored yet and whose row lacks a date or the
    publisher's stable article ID, read both from the article page (``adapter.article_details``),
    serially and bounded by the list length; a failed lookup leaves them unknown and never fails
@@ -259,11 +259,29 @@ async def ingest_news_ranking(key, settings, session_factory, batch_key=None):
             return _replay_result(definition, batch)
         reused = reused_ranking_snapshot(session, definition, batch_key)
     if reused is not None:
-        # Same upstream list already stored by this run's Subject ranking: no request at all.
+        # Same upstream list already stored by this run's Subject ranking: the list itself is not
+        # requested again. Only listed articles not stored yet that lack a date or a stable ID
+        # are completed from their article pages (none for Hacker News, whose rows carry both).
         ranking_batch, entries = reused
+        lookups = None
+        with session_factory() as session:
+            known = stored_urls(
+                session, definition, {normalize_url(entry.item.url) for entry in entries}
+            )
+        adapter_type = definition.adapter
+        if any(_needs_lookup(adapter_type, entry, known) for entry in entries):
+            with ingestion_phase(FETCH):
+                async with HTTPClient(settings) as http:
+                    adapter = adapter_type(http, settings.source_fetch_limit)
+                    entries, lookups = await complete_article_details(adapter, entries, known)
         with ingestion_phase(PERSIST), session_factory.begin() as session:
             return persist_news_ranking(
-                session, definition, entries, batch_key, reused_batch_id=str(ranking_batch.id)
+                session,
+                definition,
+                entries,
+                batch_key,
+                lookups=lookups,
+                reused_batch_id=str(ranking_batch.id),
             )
     with ingestion_phase(FETCH):
         async with HTTPClient(settings) as http:

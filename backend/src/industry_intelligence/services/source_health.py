@@ -11,6 +11,10 @@ derived on every read, never stored:
 * ``degraded``: the latest attempt succeeded but rejected malformed rows (``invalid_count > 0``).
 * ``healthy``: the latest attempt succeeded without rejected rows.
 
+Source-1: each row says whether the source is a Trending list (``trending``: a publisher's ranked
+article list in ``NEWS_RANKINGS``), and the summary counts those separately, so a failing source
+that Trending does not read (e.g. a Market Pulse chart) is never reported as a Trending failure.
+
 ``success``, ``replayed``, and ``unchanged`` are successful outcomes; zero new items is not a
 failure. Earlier failures do not change the state of a source whose latest attempt is clean;
 they are reported separately (``consecutive_failures``, ``recent_failures``, ``last_error``).
@@ -21,6 +25,7 @@ from __future__ import annotations
 
 from sqlalchemy import func, select
 
+from industry_intelligence.adapters.source.content_registry import NEWS_RANKINGS
 from industry_intelligence.db.models.operations import SourceAttempt, UpdateRun
 
 HEALTH_STATES = ("healthy", "degraded", "failing", "never_run")
@@ -66,6 +71,7 @@ def _source_row(session, key, kind):
     row = {
         "source": key,
         "kind": kind,
+        "trending": key in NEWS_RANKINGS,
         "health": health_state(latest),
         "last_attempt_at": None,
         "last_outcome": None,
@@ -134,6 +140,7 @@ def source_health(session):
 
     sources = [_source_row(session, key, kind) for key, kind in source_inventory()]
     states = [row["health"] for row in sources]
+    trending = [row["health"] for row in sources if row["trending"]]
     runs = session.scalars(
         select(UpdateRun)
         .order_by(UpdateRun.started_at.desc(), UpdateRun.id.desc())
@@ -143,6 +150,10 @@ def source_health(session):
         "summary": {
             "sources": len(sources),
             **{state: states.count(state) for state in HEALTH_STATES},
+            "trending_lists": {
+                "sources": len(trending),
+                **{state: trending.count(state) for state in HEALTH_STATES},
+            },
         },
         "update": {
             "lock": lock_state(session),
@@ -170,6 +181,10 @@ def render_text(report):
     summary = report["summary"]
     counts = ", ".join(f"{state} {summary[state]}" for state in HEALTH_STATES)
     lines = [f"Source Health ({summary['sources']} automatic sources: {counts})"]
+    trending = summary["trending_lists"]
+    trending_counts = ", ".join(f"{state} {trending[state]}" for state in HEALTH_STATES)
+    lists = trending["sources"]
+    lines.append(f"Trending lists ({lists} publisher ranked lists: {trending_counts})")
     runs = report["update"]["recent_runs"]
     latest = (
         f"latest run {runs[0]['run_id']} {runs[0]['status'].upper()} "
@@ -178,13 +193,14 @@ def render_text(report):
         else "no recorded run"
     )
     lines += [f"Update lock: {report['update']['lock']} · {latest}", ""]
-    header = f"{'source':<28} {'kind':<16} {'health':<10} {'last success':<18} {'fails':>5}  "
+    header = f"{'source':<28} {'kind':<20} {'health':<10} {'last success':<18} {'fails':>5}  "
     lines.append(header + "last error")
     for row in report["sources"]:
         fails = f"{row['consecutive_failures']}/{row['recent_failures']}"
         error = row["last_error"]["summary"] if row["last_error"] else ""
+        kind = f"{row['kind']} (trending)" if row["trending"] else row["kind"]
         lines.append(
-            f"{row['source']:<28} {row['kind']:<16} {row['health']:<10} "
+            f"{row['source']:<28} {kind:<20} {row['health']:<10} "
             f"{_short(row['last_success_at']):<18} {fails:>5}  {error}"
         )
     lines += ["", f"fails = consecutive / within the last {RECENT_WINDOW} attempts"]
