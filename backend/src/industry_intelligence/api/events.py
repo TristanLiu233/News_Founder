@@ -28,12 +28,15 @@ def get_events(
     to: datetime | None = None,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    q: str | None = Query(None, min_length=2, max_length=200),
 ):
     for value in (from_, to):
         if value is not None and value.tzinfo is None:
             raise HTTPException(422, "from/to must include a timezone offset")
+    if q is not None and len(" ".join(q.split())) < 2:
+        raise HTTPException(422, "q must contain at least 2 characters")
     return list_events(
-        session, domain, subject_id, company_id, event_type, from_, to, limit, offset
+        session, domain, subject_id, company_id, event_type, from_, to, limit, offset, q
     )
 
 

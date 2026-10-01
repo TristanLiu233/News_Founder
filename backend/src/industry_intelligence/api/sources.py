@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from industry_intelligence.db.session import get_db_session
-from industry_intelligence.services.today import sources, today
+from industry_intelligence.services.today import TODAY_DEFAULT_LIMIT, sources, today, today_events
 from industry_intelligence.services.trending import DEFAULT_LIMIT, SELECTION_VIEWS, trending
 
 router = APIRouter(prefix="/api/v1", tags=["information retrieval"])
@@ -20,6 +20,16 @@ def list_sources(session: Annotated[Session, Depends(get_db_session)]):
 @router.get("/today")
 def get_today(session: Annotated[Session, Depends(get_db_session)]):
     return today(session)
+
+
+@router.get("/today/events")
+def get_today_events(
+    session: Annotated[Session, Depends(get_db_session)],
+    domain: str | None = Query(default=None, pattern="^(computer|finance|gaming)$"),
+    limit: int = Query(default=TODAY_DEFAULT_LIMIT, ge=1, le=30),
+):
+    # Product-2: the newest canonical Events per domain (recency only; no popularity order).
+    return today_events(session, domain, limit)
 
 
 @router.get("/trending")

@@ -129,6 +129,8 @@ python -m industry_intelligence.cli rank computer
 | GET | `/health/db` | PostgreSQL connectivity |
 | GET | `/api/v1/sources` | Source status and latest counts |
 | GET | `/api/v1/today` | Latest source-native lists |
+| GET | `/api/v1/today/events?domain=finance&limit=10` | Today (Product-2): newest canonical Events per domain within 24 h before the latest collection |
+| GET | `/api/v1/events?q=PMI` | Events whose headline (or a report's headline) contains the text |
 | GET | `/api/v1/trending` | Events on publishers' own ranked article lists, per domain, with every native rank as evidence (no score) |
 | GET | `/api/v1/trending?domain=gaming&limit=20` | One domain; optional `limit` (1–100, default 20), `total` reports the number of Event cards |
 | GET | `/api/v1/trending?view=native` | `view` is `aggregate` (default, Trending-3: current Events in one presentation order derived from their native ranks; no score is returned) or `native` (the publisher lists in catalog order, each in its own order, with movement); the Trending-2 `selection=home\|native` still works as an alias |
@@ -141,10 +143,10 @@ Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and t
 
 | Route | Purpose | Default size |
 | --- | --- | --- |
-| `/` | Event-first dashboard (Product-1) composed from existing APIs: Trending Events per domain first (Trending-3: the first four of the same aggregate order as `/trending`; publisher ranks as published; each card with one persisted summary — the Event's AI Summary, else a publisher excerpt, else none), then Today at a Glance, Latest Events, live External Company Rankings shown as published, and Explore (Companies, Search); no Home score, and nothing is generated on a page load | 4 Events per domain, 3 reports per domain, 5 Events, Top 5 per ranking |
-| `/today` | Discover · Today: source-native content, one domain tab at a time. Every domain shows Latest News first (its `news`/`feed` sources from `/api/v1/sources`, read through `/api/v1/news`); Computer and Gaming then show their source rankings, Finance shows Market Pulse in a collapsed secondary section | 5 per source, View More |
+| `/` | Daily overview (Product-2): Trending Events per domain (the first four of the `/trending` order, publisher ranks as published, one persisted summary each — AI Summary, else a publisher excerpt, else none), New Today (the three newest Events per domain), live External Company Rankings shown as published, and Explore (Companies, Search); every section links to its page; nothing is generated on a page load | 4 Trending + 3 Today Events per domain, Top 5 per ranking |
+| `/today` | Discover · Today (Product-2): what is new — the newest canonical Events of one domain, latest report first, from reports published in the 24 hours before the latest collection; each source's own lists (Computer/Gaming) or Market Pulse (Finance) in a collapsed section | 10 Events, up to 30 |
 | `/trending` | Discover · Trending: Event cards for the domain's publisher ranked article lists. Combined (default, Trending-3): current Events placed by their best publisher rank, with a small lift for Events that more than one publisher lists; By publisher list (`?view=native`): each list in its publisher's order with same-list movement (↑3, ↓2, —, NEW; Trending-2). Each card shows the headline (→ Event Detail), every publisher rank exactly as published (e.g. "Gematsu · Popular Posts #2"), time, report/source counts, and Topics; lists shown with their stated window and observation time; no platform score or position number | 20 events, expandable to 50 |
-| `/search` | Discover · Search: multilingual topic (Subject) search with a query and domain tabs; type, source (`searchable` keys from `/api/v1/sources`), and language are under More filters; no search-mode control (the backend default is used) | 20 per page |
+| `/search` | Discover · Search (Product-2): Events (headline match, newest first), Topics (multilingual Subject search with domain tabs; type, source, and language under Topic filters), and Companies (names and aliases, e.g. 微软 → Microsoft) in separate sections | 5 Events, 20 Topics per page, 5 Companies |
 | `/subject/{id}` | Topic (Subject) Detail: current rank and trend, related Events (hidden when none), rank history, where it appears (source lists), related news collapsed (the same reports are grouped under related Events), aliases, and a collapsed Methodology note (score, observations, link rules) | 20 lists, 10 news per page, 5 related Events |
 | `/rankings` | External company rankings per domain: ranking selector (only rankings with a collected snapshot; a direct link still opens a never-collected one), one-line publisher/metric/date/coverage/original-source meta and disclaimer, a collapsed About this ranking note (cadence, acquisition, observed time, source column and description), latest snapshot table with movement, dropped entries, company names linking to Company Detail, on-demand snapshot history (`?domain=&ranking=&snapshot=`) | Top 20, expandable to all stored rows |
 | `/companies` | Company directory with company search (names, aliases, legal/localized names, identifiers), domain filter, and profile availability; separate from Subject search | 30 per page, previous/next |
@@ -1181,3 +1183,16 @@ The implementation record and live verification are in `DEVELOPMENT.md`.
   and are not enabled.
 - `source-health` shows a separate "Trending lists" line, so a failure in a source Trending does
   not read (e.g. a Market Pulse chart) is not a Trending failure.
+
+## Product-2 — Clear page roles
+
+- **Home** — what to look at: a preview of Trending and Today per domain, external company
+  rankings, and search, each linking to its page.
+- **Today** — what is new: the newest events of a domain (reports from the 24 hours before the
+  latest collection), newest first. It is not a popularity list.
+- **Trending** — what selected publishers rank as popular (unchanged).
+- **Search** — find an event by headline, a topic by name, or a company by name (English or
+  Chinese), each in its own section.
+- **Event** — what happened and the sources: the reports with publisher excerpts come first; AI
+  text appears only when a checked summary exists and is labelled AI-generated.
+- **Rankings / Companies** — external company rankings, shown as published.

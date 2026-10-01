@@ -531,3 +531,79 @@ def test_events_api_list_detail_content_and_redirect(client, db, sources, tag):
     assert client.get(f"/api/v1/events/{uuid4()}").status_code == 404
     assert client.get(f"/api/v1/events/{uuid4()}/content").status_code == 404
     assert client.get("/api/v1/events/not-a-uuid").status_code == 422
+
+
+# --- Product-2: Today (recency), headline match, timeline excerpts --------------------------
+
+
+def test_today_events_are_recent_canonical_events_newest_report_first(db, sources, tag, client):
+    from industry_intelligence.services.today import today_events
+
+    headline = f"{tag}股份：拟11.5亿元收购湖北{tag}45%股权"
+    first = content(db, sources[0], headline, T0)
+    same = content(db, sources[1], f"【{headline}】公告称。", T0 + timedelta(minutes=5))
+    newer = content(db, sources[0], f"{tag}数贸会今天闭幕 超5万名客商到会", T0 + timedelta(hours=2))
+    # 30 h before the latest collection (T0 + 2 h 30 min): outside the 24 h window.
+    old = content(
+        db, sources[2], f"{tag} appeals court upholds designation", T0 - timedelta(hours=30), "en"
+    )
+    build(db, first, same, newer, old)
+    finance = today_events(db, "finance", limit=10)["domains"][0]
+    assert finance["status"] == "ready"
+    assert finance["collected_at"] == T0 + timedelta(hours=2, minutes=30)
+    assert finance["window_start"] == T0 - timedelta(hours=21, minutes=30)
+    deal, recent, stale = (event_of(db, item)[0] for item in (first, newer, old))
+    # One row per canonical Event (two reports of one disclosure), latest report first.
+    assert [item["id"] for item in finance["items"]] == [str(recent.id), str(deal.id)]
+    assert finance["total"] == 2 and finance["items"][1]["content_count"] == 2
+    assert str(stale.id) not in {item["id"] for item in finance["items"]}
+    body = client.get("/api/v1/today/events", params={"domain": "finance", "limit": 1}).json()
+    assert body["window_hours"] == 24 and body["ordering"] == "latest_report_first"
+    assert [item["id"] for item in body["domains"][0]["items"]] == [str(recent.id)]
+    assert body["domains"][0]["total"] == 2
+    assert client.get("/api/v1/today/events", params={"limit": 31}).status_code == 422
+    assert client.get("/api/v1/today/events", params={"domain": "sports"}).status_code == 422
+    assert not {"score", "ordering_value", "rank"} & set(body["domains"][0]["items"][0])
+
+
+def test_list_events_headline_match_is_plain_and_covers_report_headlines(db, sources, tag, client):
+    _, _, (deal, other, english) = _three_events(db, sources, tag)
+    assert [i["id"] for i in list_events(db, q=f"{tag}数贸会")["items"]] == [str(other.id)]
+    # Case-insensitive; whitespace collapsed.
+    assert [i["id"] for i in list_events(db, q=f"  {tag}   APPEALS court ")["items"]] == [
+        str(english.id)
+    ]
+    # Only a report's headline (not the Event headline) carries "】公告称": still the same Event.
+    assert [i["id"] for i in list_events(db, q=f"{tag}45%股权】公告称")["items"]] == [str(deal.id)]
+    # LIKE wildcards are literal.
+    assert list_events(db, q=f"{tag}_")["total"] == 0
+    assert list_events(db, q=f"{tag}%数贸")["total"] == 0
+    response = client.get("/api/v1/events", params={"q": f"{tag}数贸会"})
+    assert response.status_code == 200 and response.json()["total"] == 1
+    assert client.get("/api/v1/events", params={"q": "x"}).status_code == 422
+    assert client.get("/api/v1/events", params={"q": "  x  "}).status_code == 422
+
+
+def test_timeline_rows_carry_the_stored_publisher_excerpt_only_when_fit_to_show(db, sources, tag):
+    with_excerpt = content(
+        db,
+        sources[0],
+        f"{tag} chipmaker reports record quarter",
+        T0,
+        "en",
+        description=f"The {tag} chipmaker said revenue rose on data-centre demand.",
+    )
+    repeated = content(
+        db,
+        sources[1],
+        f"{tag} chipmaker reports record quarter",
+        T0 + timedelta(minutes=3),
+        "en",
+        description=f"{tag} chipmaker reports record quarter",
+    )
+    build(db, with_excerpt, repeated)
+    event, _ = event_of(db, with_excerpt)
+    rows = {row["id"]: row for row in event_content(db, event.id)["items"]}
+    assert rows[str(with_excerpt.id)]["excerpt"].startswith(f"The {tag} chipmaker said")
+    # An excerpt that only repeats the headline is not shown.
+    assert rows[str(repeated.id)]["excerpt"] is None

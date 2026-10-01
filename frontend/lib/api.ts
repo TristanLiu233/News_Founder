@@ -393,6 +393,22 @@ export function fetchToday(signal?: AbortSignal): Promise<TodayResponse> {
   return getJson("/api/v1/today", {}, signal);
 }
 
+/**
+ * Product-2 Today: per domain, the newest canonical Events whose latest report was published within
+ * `window_hours` before the domain's most recent collection (`collected_at`), latest report first.
+ * Recency only: no popularity order, score, or AI.
+ */
+export interface TodayEventsDomain {
+  domain: Domain; status: "ready" | "unavailable"; collected_at: string | null; window_start: string | null;
+  total: number; items: EventSummary[];
+}
+export interface TodayEventsResponse {
+  generated_at: string; window_hours: number; ordering: string; domains: TodayEventsDomain[];
+}
+export function fetchTodayEvents(options: {domain?: Domain; limit?: number} = {}, signal?: AbortSignal): Promise<TodayEventsResponse> {
+  return getJson("/api/v1/today/events", options, signal);
+}
+
 export function fetchTrending(
   signal?: AbortSignal, options: {domain?: Domain; limit?: number; view?: TrendingView} = {},
 ): Promise<TrendingResponse> {
@@ -483,6 +499,8 @@ export interface EventContentItem {
   id: string; title: string; url: string; source: string; content_type: "news" | "feed";
   language: string; published_at: string | null; observed_at: string;
   link_strategy: string; link_confidence: string;
+  /** The stored publisher excerpt when fit to show (Product-2); never AI text. */
+  excerpt: string | null;
 }
 export interface EventDetail extends EventSummary {
   requested_id: string; redirected: boolean; representative_content_id: string | null;
@@ -493,7 +511,8 @@ export interface EventContentPage {
 }
 
 export function fetchEvents(
-  options: {domain?: Domain; event_type?: EventType; subject_id?: string; company_id?: string; limit?: number; offset?: number},
+  /** `q` (Product-2): plain case-insensitive match on the Event's or a report's headline. */
+  options: {domain?: Domain; event_type?: EventType; subject_id?: string; company_id?: string; q?: string; limit?: number; offset?: number},
   signal?: AbortSignal,
 ): Promise<EventsPage> {
   return getJson("/api/v1/events", options, signal);

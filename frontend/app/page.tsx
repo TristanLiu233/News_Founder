@@ -4,24 +4,24 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
-import { DOMAINS, EventList, NewsList, TrendBadge, TrendingEventCard } from "../components/shared";
+import { DOMAINS, EventList, TrendBadge, TrendingEventCard } from "../components/shared";
 import {
-  fetchCompanyRanking, fetchCompanyRankings, fetchEvents, fetchNews, fetchTrending,
-  type CompanyRankingDetail, type CompanyRankingEntry, type CompanyRankingSummary, type Domain, type EventsPage,
-  type NewsPage, type TrendingResponse,
+  fetchCompanyRanking, fetchCompanyRankings, fetchTodayEvents, fetchTrending,
+  type CompanyRankingDetail, type CompanyRankingEntry, type CompanyRankingSummary,
+  type TodayEventsResponse, type TrendingResponse,
 } from "../lib/api";
 import { common, formatDateTime, useLocale, type Locale } from "../lib/i18n";
 
 /**
- * Home is Event-first (Product-1): the first section answers "what is happening now" with the
- * Event-centric Trending read model (publisher-ranked Events per domain, in the API's display order,
- * each with its persisted summary). Latest reports and Events, external company rankings, and the
- * Companies/Search entry points follow. Home composes existing read APIs only: nothing is scored,
- * ranked, or generated here, and no request triggers ingestion or AI.
+ * Home is the daily overview (Product-2): a short preview of each destination, each linking out.
+ * 1. Trending — what publishers rank as popular (the /trending aggregate order, first 4 per domain).
+ * 2. Today — what is new (the /today read model, newest 3 Events per domain).
+ * 3. External company rankings (Top 5 each), then Explore (Companies, Search).
+ * Home composes existing read APIs only: nothing is scored, ranked, or generated here, and no
+ * request triggers ingestion or AI.
  */
 const TRENDING_TOP = 4;
-const NEWS_PER_DOMAIN = 3;
-const LATEST_EVENTS = 5;
+const TODAY_PER_DOMAIN = 3;
 const RANKING_TOP = 5;
 // The API maximum for the ranking list; only a handful of rankings are registered.
 const RANKINGS_LIMIT = 100;
@@ -29,10 +29,9 @@ const RANKINGS_LIMIT = 100;
 const copy = {
   en: {
     title: "Industry Intelligence",
-    intro: "What is happening now in Computer, Finance and Gaming: events on publishers' own ranked lists first, then the latest reports, external company rankings and search.",
-    today: "Today at a Glance", todayNote: "Latest reports from each domain's news sources, newest first.", viewToday: "View Today", noNews: "No reports for this domain yet.",
-    events: "Latest Events", eventsNote: "Most recently reported events across all domains.", viewEvents: "View all events", noEvents: "No events yet.",
-    trending: "Trending Events", trendingNote: "Current events from selected publishers' own hot lists, placed by their best publisher position; events on more than one publisher's list come first among near-equal positions. Not a popularity score. Summaries are AI-generated from the listed reports or are publisher excerpts.", viewTrending: "View Trending", noTrending: "No trending events for this domain yet.",
+    intro: "Computer, Finance and Gaming at a glance: what publishers rank as popular, what is new, and what external company rankings say.",
+    today: "New Today", todayNote: "The newest events in each domain, latest report first.", viewToday: "View Today", noToday: "No new events for this domain.",
+    trending: "Trending Events", trendingNote: "Events on selected publishers' own popularity lists, by their best publisher rank. Summaries are AI-generated from the listed reports or are publisher excerpts.", viewTrending: "View Trending", noTrending: "No trending events for this domain yet.",
     rankings: "External Company Rankings", rankingsNote: "Rankings are shown as published by their original sources.", viewRankings: "View all rankings",
     noRankings: "No external rankings have been collected yet.", rankingFailed: "This ranking could not be loaded.",
     snapshot: "As of", notEnoughHistory: "Not enough history yet", openRanking: "Open ranking",
@@ -45,10 +44,9 @@ const copy = {
   },
   "zh-CN": {
     title: "行业情报",
-    intro: "计算机、金融、游戏三个领域正在发生什么：先看登上发布方自有榜单的事件，再看最新报道、外部公司排行榜与搜索。",
-    today: "今日速览", todayNote: "各领域资讯来源的最新报道，按时间由新到旧。", viewToday: "查看今日", noNews: "该领域暂无报道。",
-    events: "最近事件", eventsNote: "各领域最近被报道的事件。", viewEvents: "查看全部事件", noEvents: "暂无事件。",
-    trending: "热门事件", trendingNote: "选自发布方自有热门榜单的近期事件，按其在发布方榜单中的最佳名次排列；同时出现在多个来源榜单的事件在名次相近时靠前。展示顺序并非热度评分。摘要由 AI 根据所列报道生成，或为发布方原文摘录。", viewTrending: "查看热门", noTrending: "该领域暂无热门事件。",
+    intro: "计算机、金融、游戏一览：发布方榜单上的热门、最新事件，以及外部公司排行榜。",
+    today: "今日新事件", todayNote: "各领域最新的事件，按最近报道时间由新到旧。", viewToday: "查看今日", noToday: "该领域暂无新事件。",
+    trending: "热门事件", trendingNote: "登上选定发布方自有热门榜单的事件，按其在发布方榜单中的最佳名次排列。摘要由 AI 根据所列报道生成，或为发布方原文摘录。", viewTrending: "查看热门", noTrending: "该领域暂无热门事件。",
     rankings: "外部公司排行榜", rankingsNote: "排行榜按原始来源发布的内容原样展示。", viewRankings: "查看全部排行榜",
     noRankings: "尚未采集到外部排行榜。", rankingFailed: "该榜单暂时无法加载。",
     snapshot: "数据日期", notEnoughHistory: "尚无足够历史数据", openRanking: "打开榜单",
@@ -77,14 +75,11 @@ function useLoad<T>(load: (signal: AbortSignal) => Promise<T>): Load<T> {
 }
 
 // Module-level loaders keep `useLoad` dependencies stable, so every request is made once per page load.
-const newsLoaders = Object.fromEntries(DOMAINS.map(domain => [
-  domain, (signal: AbortSignal) => fetchNews({domain, limit: NEWS_PER_DOMAIN}, signal),
-])) as Record<Domain, (signal: AbortSignal) => Promise<NewsPage>>;
-const loadEvents = (signal: AbortSignal) => fetchEvents({limit: LATEST_EVENTS}, signal);
-// One request returns the Top 5 of every domain.
 // Trending-3: the same aggregate order as /trending (current Events by best publisher rank plus a small
 // bonus per additional publisher), first TRENDING_TOP per domain. A display order, not a score.
 const loadTrending = (signal: AbortSignal) => fetchTrending(signal, {limit: TRENDING_TOP});
+// Product-2: one request returns the newest Events of every domain (the /today read model).
+const loadToday = (signal: AbortSignal) => fetchTodayEvents({limit: TODAY_PER_DOMAIN}, signal);
 
 type RankingCardData = {summary: CompanyRankingSummary; detail?: CompanyRankingDetail};
 
@@ -111,18 +106,6 @@ function SectionState<T>({ state, locale, children }: { state: Load<T>; locale: 
   if (state.status === "loading") return <p className="empty" aria-live="polite">{common[locale].loading}</p>;
   if (state.status === "error") return <p className="empty" role="alert">{copy[locale].sectionFailed}</p>;
   return <>{children(state.data)}</>;
-}
-
-function TodayCard({ domain, locale }: { domain: Domain; locale: Locale }) {
-  const state = useLoad(newsLoaders[domain]);
-  const t = copy[locale];
-  return <article className="ranking-card compact" aria-labelledby={`today-${domain}`}>
-    <header className="list-header"><h3 id={`today-${domain}`}>{common[locale].shortDomains[domain]}</h3></header>
-    <SectionState state={state} locale={locale}>
-      {page => page.items.length === 0 ? <p className="empty">{t.noNews}</p> : <NewsList items={page.items.slice(0, NEWS_PER_DOMAIN)} locale={locale}/>}
-    </SectionState>
-    <p className="card-footer"><Link href={`/today?domain=${domain}`}>{t.viewToday} →</Link></p>
-  </article>;
 }
 
 function formatMetric(entry: CompanyRankingEntry, detail: CompanyRankingDetail, locale: Locale) {
@@ -188,7 +171,7 @@ export default function Home() {
     if (view === "trending" || view === "today") router.replace(`/${view}`);
   }, [router]);
   const trending = useLoad<TrendingResponse>(loadTrending);
-  const events = useLoad<EventsPage>(loadEvents);
+  const todayEvents = useLoad<TodayEventsResponse>(loadToday);
   const rankings = useLoad<RankingCardData[]>(loadRankings);
   const t = copy[locale];
   const c = common[locale];
@@ -217,17 +200,16 @@ export default function Home() {
     <section aria-labelledby="home-today">
       <SectionHeader id="home-today" title={t.today} link="/today" linkText={t.viewToday}/>
       <p className="section-note">{t.todayNote}</p>
-      <div className="card-grid home-grid">{DOMAINS.map(domain => <TodayCard key={domain} domain={domain} locale={locale}/>)}</div>
-    </section>
-
-    <section aria-labelledby="home-events">
-      <SectionHeader id="home-events" title={t.events} link="/events" linkText={t.viewEvents}/>
-      <p className="section-note">{t.eventsNote}</p>
-      <article className="ranking-card compact">
-        <SectionState state={events} locale={locale}>
-          {page => page.items.length === 0 ? <p className="empty">{t.noEvents}</p> : <EventList items={page.items} locale={locale} showDomain compact/>}
-        </SectionState>
-      </article>
+      <SectionState state={todayEvents} locale={locale}>
+        {data => <div className="card-grid home-grid">{DOMAINS.map(domain => {
+          const items = data.domains.find(item => item.domain === domain)?.items ?? [];
+          return <article className="ranking-card compact" key={domain} aria-labelledby={`today-${domain}`}>
+            <header className="list-header"><h3 id={`today-${domain}`}>{c.shortDomains[domain]}</h3></header>
+            {items.length === 0 ? <p className="empty">{t.noToday}</p> : <EventList items={items} locale={locale} compact/>}
+            <p className="card-footer"><Link href={`/today?domain=${domain}`}>{t.viewToday} →</Link></p>
+          </article>;
+        })}</div>}
+      </SectionState>
     </section>
 
     <section aria-labelledby="home-rankings">

@@ -208,6 +208,10 @@ def _summary(event, sources, languages, subjects, companies, preview=True):
     }
 
 
+def _escape_like(value):
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def list_events(
     session,
     domain=None,
@@ -218,12 +222,28 @@ def list_events(
     to=None,
     limit=20,
     offset=0,
+    q=None,
 ):
-    """Canonical Events, most recently reported first; redirected duplicates are excluded."""
+    """Canonical Events, most recently reported first; redirected duplicates are excluded.
+
+    ``q`` (Product-2) is a plain case-insensitive substring match on the Event's headline or on
+    any of its reports' headlines, exactly as published: no scoring, translation, or fuzzy
+    matching, and the order stays most recently reported first.
+    """
 
     query = select(Event).where(
         Event.content_count > 0, Event.id.not_in(select(EventRedirect.duplicate_id))
     )
+    if q and q.strip():
+        pattern = "%" + _escape_like(" ".join(q.split())) + "%"
+        query = query.where(
+            Event.canonical_title.ilike(pattern, escape="\\")
+            | Event.id.in_(
+                select(EventContentLink.event_id)
+                .join(ContentItem, ContentItem.id == EventContentLink.content_item_id)
+                .where(ContentItem.title.ilike(pattern, escape="\\"))
+            )
+        )
     if domain:
         query = query.where(Event.domain == domain)
     if event_type:
@@ -296,6 +316,8 @@ def _content_rows(session, event_id, limit, offset, order="asc"):
             "observed_at": _iso(item.observed_at),
             "link_strategy": link.strategy,
             "link_confidence": link.confidence,
+            # Product-2: the stored publisher excerpt when fit to show (never AI text).
+            "excerpt": clean_excerpt(item.description, item.title),
         }
         for item, source, link in rows
     ]

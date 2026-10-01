@@ -35,9 +35,9 @@ planned or speculative results in a finished entry.
 ## Current Baseline
 
 - Branch `phase-7`; Alembic head `20260930_12` (unchanged by Trending-1, Product-1, Trending-2,
-  Trending-3, Source-1).
-- Backend: pytest 882 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
-  `industry_intelligence_test`; unit 660; Ruff check and format check clean (after Source-1).
+  Trending-3, Source-1, Product-2).
+- Backend: pytest 885 passed, 1 skipped (pre-existing Hacker News skip) on the isolated
+  `industry_intelligence_test`; unit 660; Ruff check and format check clean (after Product-2).
 - Frontend: ESLint, TypeScript, and the Next.js production build (11 routes) pass.
 - Live dev database: `data-quality-audit` 0 errors / 0 warnings / 6 info; `source-health`
   30/31 healthy and Trending lists 6/6 healthy after Source-1 (`eastmoney_turnover`, a Market
@@ -1498,3 +1498,163 @@ Detail: no horizontal overflow, chips within the viewport; console errors 0; API
 
 Stop source expansion. Computer 2, Finance 2, Gaming 2 lists; revisit Gaming only if a current,
 non-overlapping native list appears. Return to product polish.
+
+## 2026-10-01 — Product-2 — Information Architecture & Daily Reading Flow
+
+Status: complete (2026-10-01). No migration. Sources, Trending formula, AI, and scheduler
+unchanged (`--skip-ai`; no provider request).
+
+### Goal
+
+Give Home, Today, Trending, Search, and Event Detail one clear, non-overlapping job each, using
+small read-model changes and the existing components.
+
+### Start state
+
+- Branch `phase-7` at `0d1ffed` (Source-1), clean, no remote; Alembic `20260930_12`; scheduler
+  `AI_ARGS = ["--skip-ai"]`.
+- Baseline (actual): pytest **882 passed, 1 skipped**; Ruff check/format clean (184 files);
+  `data-quality-audit` 0 / 0 / 6 info; ESLint, TypeScript, Next.js build (11 routes) pass.
+
+### Pre-change UX audit (read-only; live DB; 1280 px English and 375 px 简体中文)
+
+- **Home** (3,014 px desktop): Trending Events (4/domain) → "Today at a Glance" (3 newest
+  *reports*/domain from `/news`) → "Latest Events" (5 newest Events across domains; 4 of 5
+  Finance) → External Company Rankings → Explore. Two "latest" sections overlapped: in Finance
+  "Latest Events" and "Today at a Glance" showed the same 3 Events.
+- **Today** was not Event-centric: per-source chronological feed cards (5 reports each) plus raw
+  Subject source-ranking lists (top 5 each). Computer: 7 cards, 38 rows (4,921 px at 375 px);
+  its HN Top Stories and IT之家 日榜 lists are exactly Trending's inputs.
+- **Trending**: structurally right; movement badges already only in "By publisher list".
+- **Search**: Topic (Subject) search only. "PMI" → 0 although a live PMI Event exists; "微软" → 0
+  (Microsoft lives in Companies, alias 微软); "英伟达" → only one ranked story; headline queries
+  ("Mate 90") return ranked-story Subjects labelled "Story". Labels exposed "Canonical name", "1
+  results", pagination shown for one result, half-width colon in Chinese.
+- **Event Detail**: without displayable AI the first block after the meta line was an "AI
+  Intelligence — unavailable" strip, ahead of the reports; timeline rows had no excerpt.
+- **Topic / Rankings / Company**: compact; Rankings → Company → Ranking navigation works; no
+  change needed. No horizontal overflow anywhere at 375 px.
+
+### Home / Today / Trending overlap (canonical Event IDs, live DB)
+
+Before (Trending = aggregate top 20; Today = what the Today page listed):
+
+| Domain | Today ∩ Trending | Home "glance" ∩ Trending | Home "Latest Events" ∩ "glance" |
+| --- | --- | --- | --- |
+| Computer | 8 (3 HN rows by URL + IT之家 日榜 top 5, the same articles under mobile URLs) | 0 | 1 |
+| Finance | 0 | 0 | 3 |
+| Gaming | 2 | 1 | 0 |
+
+After (Today = new read model, top 10; Home = Trending top 4 + Today top 3):
+
+| Domain | Today ∩ Trending | Home Today ∩ Home Trending | Home Today ∩ Trending top 20 |
+| --- | --- | --- | --- |
+| Computer | 0 | 0 | 0 |
+| Finance | 0 | 0 | 0 |
+| Gaming | 2 | 1 | 1 |
+
+The remaining Gaming overlap is legitimate: "Sakura Wars 6" and "PlayStation Plus October" are
+both new and on Gematsu Popular Posts.
+
+### Page-role decisions
+
+- **Home = overview**: Trending (4/domain) → New Today (3/domain) → External Company Rankings →
+  Explore; every section links out. "Latest Events" and report-level "Today at a Glance" removed.
+- **Today = recent Event discovery** (`today_events`): canonical Events of one domain whose latest
+  report was published within 24 h before the domain's latest collection (newest
+  `ContentItem.observed_at`, UTC), latest report first (`list_events` order). The rule was chosen
+  after the audit: rolling 24 h has computer 108 / finance 241 / gaming 22 Events, enough for 10
+  per domain; a request-time window would empty Today before each daily run, and a calendar day
+  would need a Beijing-vs-Sydney choice. No Trending exclusion was needed: among the 10 newest
+  Events Trending appears 0 / 0 / 2 times, because popularity accumulates on older stories.
+  10 per domain, expandable to 30, link to `/events?domain=`; source rankings and Market Pulse
+  stay in a collapsed secondary section requested only when opened.
+- **Trending = publisher popularity**: unchanged.
+- **Search = find**: three labelled sections — Events (plain headline match over canonical Events
+  and their reports, newest first, 5), Topics (existing Subject search, unchanged), Companies
+  (existing `/companies?q=`, 5). No scoring across types.
+- **Event Detail = evidence first**: no AI block when no insight is displayable (the About note
+  says so); timeline rows show the stored publisher excerpt labelled "Publisher excerpt"; valid
+  AI cards still render, labelled "AI-generated".
+
+### Changes made
+
+- Backend: `services/today.py` `today_events` (+ `TODAY_WINDOW`, `TODAY_DEFAULT_LIMIT`) and
+  `GET /api/v1/today/events?domain=&limit=` (1–30, default 10); `services/events.list_events(q=)`
+  and `GET /api/v1/events?q=` (2–200 characters; case-insensitive substring of the Event headline
+  or any report headline; `%`/`_` literal); `_content_rows` adds `excerpt` (`clean_excerpt`).
+- Frontend: `app/page.tsx` (Home composition and copy), `app/today/page.tsx` (rewritten),
+  `app/search/page.tsx` (sections, labels, pagination only when needed, section errors only
+  when the main search succeeded), `app/event/[id]/page.tsx` (AI de-emphasis, excerpts),
+  `lib/api.ts` (types, `fetchTodayEvents`, `q`), `app/globals.css` (two small rules).
+
+### Rejected changes
+
+- Excluding ranked-story ("Story") Subjects from Topic results — needs a change to the raw SQL of
+  the search engine; left as is (labelled "Story").
+- A Today rule that removes Trending Events — unnecessary on live data and would hide new popular
+  stories from "what is new".
+- Calendar-day Today — publishers' time zones differ; the rolling window is source-independent.
+- New navigation entries, a Today popularity rule, AI changes, movement changes, source work.
+- Fixing `eastmoney_turnover`: one bounded request returned nginx `502 Bad Gateway` (upstream);
+  not an adapter bug; deferred and isolated (Trending lists 6/6 healthy).
+
+### Files changed
+
+`backend/src/industry_intelligence/services/today.py`, `services/events.py`, `api/sources.py`,
+`api/events.py`, `tests/integration/test_events_postgres.py`; `frontend/app/page.tsx`,
+`app/today/page.tsx`, `app/search/page.tsx`, `app/event/[id]/page.tsx`, `lib/api.ts`,
+`app/globals.css`; docs `DEVELOPMENT.md`, `AGENTS.md`, `CLAUDE.md`, `README.md`.
+
+### Migration
+
+None.
+
+### Tests
+
+`test_events_postgres.py` +3: Today returns recent canonical Events newest report first, one row
+for two reports of one disclosure, excludes a report 30 h before the latest collection, window and
+collection times exact, API limit/domain validation (422) and no score fields; headline match on
+Event and report headlines, case-insensitive, whitespace-collapsed, LIKE wildcards literal, API
+`q` validation; timeline excerpt present when fit and `None` when it repeats the headline.
+Results: pytest **885 passed, 1 skipped** (unit 660); Ruff clean (184 files); ESLint,
+TypeScript, Next.js build (11 routes) pass.
+
+### Performance (SQL statements, dev DB)
+
+`today_events` 7 per domain, the same for limit 10 and 30 (no per-card queries); `/events?q=` 7;
+Event content 4. Home: 9 → 6 HTTP requests; its Today section 21 statements (3 domains) versus 12
+for the two removed sections; Trending unchanged. Today page: the old `/today` (32 statements)
+plus 1–4 `/news` calls → one `/today/events` call (7); `/today` only when the secondary section
+opens.
+
+### Browser verification (isolated production build 3090 / API 8090, live DB)
+
+- 1280 px English: Home 2,556 px (was 3,014), sections Trending / New Today / External Company
+  Rankings / Explore; Today Finance 10 distinct Events, collection note, Market Pulse loaded on
+  open (4 lists); Search: Microsoft → Events 9, Topics 4, Companies 1; 微软 → Events 15, Companies
+  Microsoft; NVIDIA → 11 / 3 / 1; 英伟达 → Events 8, Topics 1, Companies NVIDIA; Bitcoin → Topics 3
+  (no pager); 比特币 → Events 1, Topics Bitcoin ("Other name · 比特币"); BTC → Topics 2; PMI →
+  the PMI Event; Witcher with Gaming tab → 1 + 1, Finance tab → empty message, All restores;
+  zzzxqq → one empty message; `/search` → "Enter at least two characters."; Event without AI
+  → headline, meta, Timeline (no AI strip; About says none available); Event with a valid v5
+  Summary → labelled AI card + "Publisher excerpt" in the timeline; unknown Event → not-found page.
+- 375 px 简体中文: `/`, `/today?domain=gaming` (10 of 22), `/trending?domain=finance`,
+  `/search?q=微软`, Event Detail — no horizontal overflow, no element wider than the viewport.
+- Fresh tab console errors 0 (Home → Today → Event, Trending, Search); API log GET only.
+- API stopped: Today shows the existing "backend unavailable" notice, Home one line per section,
+  Search one error line.
+
+### Known limitations
+
+- Topic results still include ranked-story ("Story") Subjects for headline queries.
+- Event headline search is plain substring matching in the headline's language (no translation).
+- Today's 24 h window follows the latest collection; a source collected separately (e.g. a manual
+  run) moves the domain's anchor.
+- Finance Today is dominated by 7×24 flashes (that is what is newest).
+- `eastmoney_turnover` fails upstream (HTTP 502).
+
+### Next step
+
+Live with the new flow for a few daily runs; then decide on the "Story" topics in Search and on a
+Home/Today mobile length review.

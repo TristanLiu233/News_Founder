@@ -10,14 +10,13 @@ import { common, formatDateTime, useLocale, type Locale } from "../../../lib/i18
 
 const TIMELINE_PAGE = 10;
 const copy = {
-  en: {eyebrow: "Event", firstReported: (date: string) => `First reported ${date}`, subjects: "Related Topics", companies: "Related Companies", timeline: "Timeline", notFound: "Event not found", notFoundNote: "No event exists at this address.", allEvents: "Browse all events", loadFailed: "Could not load this section.", about: "About this event", timeBasis: (first: string, last: string) => `First reported ${first}; last reported ${last}. These are the times the sources published their reports, not verified times of the occurrence itself.`, bySource: "Reports by source", byLanguage: "Languages", coverageNote: "The number of sources shows how widely this was reported, not how important it is.", grouping: "Reports are grouped into one event when their headlines, timing, and linked topics match; related topics and companies come from the links recorded on these reports. The event type is a label taken from the headlines."},
-  "zh-CN": {eyebrow: "事件", firstReported: (date: string) => `首次报道于 ${date}`, subjects: "相关主题", companies: "相关公司", timeline: "时间线", notFound: "未找到该事件", notFoundNote: "该地址没有对应的事件。", allEvents: "浏览全部事件", loadFailed: "该部分加载失败。", about: "关于此事件", timeBasis: (first: string, last: string) => `首次报道于 ${first}，最近报道于 ${last}。以上为来源发布报道的时间，并非经过核实的事件发生时间。`, bySource: "各来源报道数", byLanguage: "语言", coverageNote: "来源数只表示报道范围，不代表重要性。", grouping: "标题、时间和关联主题相匹配的报道会归入同一事件；相关主题与公司来自这些报道已记录的关联。事件类型是依据标题给出的标签。"},
+  en: {eyebrow: "Event", firstReported: (date: string) => `First reported ${date}`, subjects: "Related Topics", companies: "Related Companies", timeline: "Timeline", notFound: "Event not found", notFoundNote: "No event exists at this address.", allEvents: "Browse all events", loadFailed: "Could not load this section.", excerptTag: "Publisher excerpt", aiUnavailable: "AI insights: none are available for this event.", aiFailed: "AI insights could not be loaded.", about: "About this event", timeBasis: (first: string, last: string) => `First reported ${first}; last reported ${last}. These are the times the sources published their reports, not verified times of the occurrence itself.`, bySource: "Reports by source", byLanguage: "Languages", coverageNote: "The number of sources shows how widely this was reported, not how important it is.", grouping: "Reports are grouped into one event when their headlines, timing, and linked topics match; related topics and companies come from the links recorded on these reports. The event type is a label taken from the headlines."},
+  "zh-CN": {eyebrow: "事件", firstReported: (date: string) => `首次报道于 ${date}`, subjects: "相关主题", companies: "相关公司", timeline: "时间线", notFound: "未找到该事件", notFoundNote: "该地址没有对应的事件。", allEvents: "浏览全部事件", loadFailed: "该部分加载失败。", excerptTag: "发布方摘录", aiUnavailable: "AI 解读：该事件暂无可用的 AI 解读。", aiFailed: "AI 解读暂时无法加载。", about: "关于此事件", timeBasis: (first: string, last: string) => `首次报道于 ${first}，最近报道于 ${last}。以上为来源发布报道的时间，并非经过核实的事件发生时间。`, bySource: "各来源报道数", byLanguage: "语言", coverageNote: "来源数只表示报道范围，不代表重要性。", grouping: "标题、时间和关联主题相匹配的报道会归入同一事件；相关主题与公司来自这些报道已记录的关联。事件类型是依据标题给出的标签。"},
 } as const;
 
 const aiCopy = {
   en: {
-    summary: "What Happened", why: "Why It Matters", badge: "AI-generated", combined: "AI Intelligence",
-    combinedUnavailable: "AI insights are currently unavailable for this event.",
+    summary: "What Happened", why: "Why It Matters", badge: "AI-generated",
     disclosure: (reports: number, sources: number) => `${sources === 1 ? `Based on ${reports === 1 ? "1 report" : `${reports} reports`} from a single source` : `Based on ${reports} reports from ${sources} sources`}. AI may make mistakes; check the linked reports.`,
     evidence: "Sources",
     languageNote: (language: string) => `AI insights are shown in the event's primary language (${language}).`,
@@ -30,8 +29,7 @@ const aiCopy = {
     contexts: {business: "Business", technology: "Technology", industry: "Industry", product: "Product", regulatory: "Regulatory"} as Record<string, string>,
   },
   "zh-CN": {
-    summary: "发生了什么", why: "为何值得关注", badge: "AI 生成", combined: "AI 解读",
-    combinedUnavailable: "该事件暂无可用的 AI 解读。",
+    summary: "发生了什么", why: "为何值得关注", badge: "AI 生成",
     disclosure: (reports: number, sources: number) => `${sources === 1 ? `依据单一来源的 ${reports} 篇报道` : `依据 ${sources} 个来源的 ${reports} 篇报道`}。AI 可能出错，请以所链接的报道为准。`,
     evidence: "来源",
     languageNote: (language: string) => `AI 内容按事件主要语言（${language}）生成。`,
@@ -62,17 +60,15 @@ function AIInsightCard({ kind, artifact, locale }: { kind: AIInsightType; artifa
 
 /**
  * What Happened and Why It Matters from persisted, validated artifacts only. Only `available` artifacts
- * carry text; every other state is a one-line note, and one combined note when neither is available.
- * AI-LP1: the text is in the event's primary language whatever the UI locale is; a one-line note says
- * so when the two differ. Nothing is translated.
+ * carry text; the other insight is a one-line note. Product-2: when neither is available (or the AI
+ * request fails) nothing is shown here — the page leads with the reports themselves, and the About
+ * note states why there is no AI text. AI-LP1: the text is in the event's primary language whatever
+ * the UI locale is; a one-line note says so when the two differ. Nothing is translated.
  */
-function AIInsights({ data, failed, locale }: { data?: EventAI; failed: boolean; locale: Locale }) {
+function AIInsights({ data, locale }: { data?: EventAI; locale: Locale }) {
   const t = aiCopy[locale];
-  if (!data && !failed) return null;
   const available = data ? AI_TYPES.filter(kind => data.insights[kind].state === "available" && data.insights[kind].artifact) : [];
-  if (!data || available.length === 0) return <section className="ai-unavailable" aria-labelledby="ai-combined">
-    <h2 id="ai-combined">{t.combined}</h2><p>{t.combinedUnavailable}</p>
-  </section>;
+  if (!data || available.length === 0) return null;
   return <div className="ai-insights">
     <p className="ai-disclosure"><span className="tag ai-badge">{t.badge}</span> {t.disclosure(data.content_count, data.source_count)}
       {data.primary_locale && data.primary_locale !== locale && <> {t.languageNote(common[locale].languages[data.primary_locale] ?? data.primary_locale)}</>}</p>
@@ -139,6 +135,7 @@ function Timeline({ eventId, total, locale }: { eventId: string; total: number; 
       {items && <ol className="event-timeline">{items.map(item => <li key={item.id}>
         <time dateTime={item.published_at ?? item.observed_at}>{formatDateTime(item.published_at ?? item.observed_at, locale)}</time>
         <div><ExternalLink href={item.url} locale={locale}><span lang={item.language}>{item.title}</span></ExternalLink>
+          {item.excerpt && <p className="timeline-excerpt" lang={item.language}><span className="summary-tag">{t.excerptTag}</span> {item.excerpt}</p>}
           <p className="meta">{item.source} · {c.languages[item.language] ?? item.language}</p></div>
       </li>)}</ol>}
       {items && items.length < total && <button type="button" className="link-button" disabled={loading} onClick={more}>{loading ? c.loading : c.viewMore}</button>}
@@ -204,7 +201,7 @@ export default function EventPage() {
         <span>{c.reports(detail.content_count)}</span>
         <span>{c.sources(detail.source_count)}</span>
       </p>
-      <AIInsights data={ai} failed={aiFailed} locale={locale}/>
+      <AIInsights data={ai} locale={locale}/>
       <Timeline eventId={detail.id} total={detail.content_count} locale={locale}/>
       {(detail.subjects.length > 0 || detail.companies.length > 0) && <div className="detail-grid">
         {detail.subjects.length > 0 && <section className="detail-section" aria-labelledby="event-subjects"><h2 id="event-subjects" className="section-title">{t.subjects}</h2>
@@ -220,7 +217,7 @@ export default function EventPage() {
           <p>{t.bySource}{sep}{detail.sources.map(source => count(source.name, source.content_count)).join(" · ")}{detail.source_count > detail.sources.length && " …"}{stop}{t.byLanguage}{sep}{detail.languages.map(item => count(c.languages[item.language] ?? item.language, item.content_count)).join(" · ")}{stop.trim()}</p>
           <p>{t.coverageNote}</p>
           <p>{t.grouping}</p>
-          <AIDetails data={ai} locale={locale}/>
+          {aiFailed ? <p>{t.aiFailed}</p> : ai && !AI_TYPES.some(kind => ai.insights[kind].state === "available") ? <p>{t.aiUnavailable}</p> : <AIDetails data={ai} locale={locale}/>}
         </InfoNote>
       </div>
     </>}

@@ -1,15 +1,29 @@
-"""Select one committed snapshot per list, never mix historical observations."""
+"""Today: source lists (one committed snapshot per list, never mixed) and the newest Events.
 
-from datetime import UTC, datetime
+Product-2 adds ``today_events``: per domain, the canonical Events whose latest report was
+published within ``TODAY_WINDOW`` before the domain's most recent collection, newest report
+first (``events.list_events`` order: latest report time, then Event ID). It is recency only —
+no popularity, Trending order, AI, or new grouping — and Events are the existing canonical
+ones, so a story reported several times is one row. The window is anchored to the latest
+collection (the newest ``ContentItem.observed_at`` of the domain, UTC), not to the request
+time or a calendar date, so the result is deterministic between update runs and never depends
+on a publisher's time zone.
+"""
 
-from sqlalchemy import select
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import func, select
 
 from industry_intelligence.adapters.source.content_registry import CONTENT_SOURCES, NEWS_RANKINGS
 from industry_intelligence.adapters.source.registry import SOURCES
-from industry_intelligence.db.models import RankObservation, Source, Subject
+from industry_intelligence.db.models import ContentItem, RankObservation, Source, Subject
 from industry_intelligence.db.models.ingestion_batch import IngestionBatch
 from industry_intelligence.domain.enums import Domain
+from industry_intelligence.services.events import list_events
 from industry_intelligence.services.news import list_news
+
+TODAY_WINDOW = timedelta(hours=24)
+TODAY_DEFAULT_LIMIT = 10
 
 
 def current_snapshot_batch(session, key):
@@ -153,3 +167,44 @@ def today(session):
             }
         )
     return dict(generated_at=datetime.now(UTC), domains=domains, finance_news=finance_news)
+
+
+def today_events(session, domain=None, limit=TODAY_DEFAULT_LIMIT):
+    """The newest canonical Events per domain within ``TODAY_WINDOW`` of the latest collection."""
+
+    domains = [domain] if domain else [str(value) for value in Domain]
+    output = []
+    for value in domains:
+        collected_at = session.scalar(
+            select(func.max(ContentItem.observed_at)).where(ContentItem.domain == value)
+        )
+        if collected_at is None:
+            output.append(
+                {
+                    "domain": str(value),
+                    "status": "unavailable",
+                    "collected_at": None,
+                    "window_start": None,
+                    "total": 0,
+                    "items": [],
+                }
+            )
+            continue
+        start = collected_at - TODAY_WINDOW
+        page = list_events(session, value, from_=start, limit=limit)
+        output.append(
+            {
+                "domain": str(value),
+                "status": "ready",
+                "collected_at": collected_at,
+                "window_start": start,
+                "total": page["total"],
+                "items": page["items"],
+            }
+        )
+    return {
+        "generated_at": datetime.now(UTC),
+        "window_hours": int(TODAY_WINDOW.total_seconds() // 3600),
+        "ordering": "latest_report_first",
+        "domains": output,
+    }

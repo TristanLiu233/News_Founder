@@ -334,3 +334,6 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .view-tabs { margin-top: .25rem; }
 .view-tabs button { padding: .35rem .85rem; font-size: .82rem; }
 .section-note .link-button { margin-top: 0; font-size: inherit; }
+/* Product-2: publisher excerpts in the Event timeline, and Search result sections. */
+.timeline-excerpt { margin: .3rem 0 0; color: #3d443f; font-size: .88rem; line-height: 1.5; overflow-wrap: anywhere; }
+.search-result h3 { margin: 0 0 .25rem; font-size: 1.05rem; overflow-wrap: anywhere; }
