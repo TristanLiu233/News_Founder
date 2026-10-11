@@ -13,14 +13,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The Python virtualenv lives at the repository root (`.venv/`); backend commands run from `backend/` (e.g. `../.venv/bin/pytest`).
 - `Settings` (`backend/src/industry_intelligence/config.py`) always loads the repository-root `.env` by absolute path, so the CLI, Alembic, and pytest share one `DATABASE_URL` regardless of working directory. `migrations/env.py` overrides the URL in `alembic.ini` with that setting.
 - `.env` is gitignored and holds local-only values such as `AI_API_KEY` (Phase 7), `SOURCE_CONTACT` (the deployment maintainer's own contact, sent only to Wikimedia hosts) and `SEC_CONTACT` (a separate contact, sent only to SEC hosts). `HTTPClient` enforces this per request host. Never print them or copy a real value into tracked files; `.env.example` keeps only placeholders.
+- Local viewing (Dev-1): `./ops/dev/start-local.sh` starts FastAPI on `127.0.0.1:8040` and Next.js on `localhost:3040` (pid files and logs in the gitignored `.runtime/`), `./ops/dev/status-local.sh` checks them, `./ops/dev/stop-local.sh` stops only what start recorded. The database follows `DATABASE_URL` (native service left running for the daily update). Independent of the 10:00 launchd update; see AGENTS.md LOCAL DEVELOPMENT RULE.
 - Local runtime (Local-1): PostgreSQL 16.15 runs natively as the launchd agent `local.industry-intelligence.postgresql` on `127.0.0.1:5433` (binaries in the conda env `ii-pg16`, `/opt/anaconda3/envs/ii-pg16/bin`; pgvector 0.8.6 built from source into it; data in `~/Library/Application Support/industry-intelligence/postgresql16`; superuser = the macOS user via peer auth on the `/tmp` socket, app role `industry`). Daily local operation does not need Docker Desktop. `docker compose up -d` (`docker-compose.yml`, `pgvector/pgvector:pg16` on 127.0.0.1:5432) is only an optional alternative and the rollback path; Docker Compose stays the production mechanism (Deployment-2A). Install, backup, restore, rollback: README "Local runtime"; `ops/postgres/` holds the service template and cluster settings.
 - `backend/constraints.txt` pins the exact tested dependency set: `pip install -c backend/constraints.txt -e "./backend[dev]"`. The backend must stay an editable install/checkout: `Settings` and the update precheck locate `.env` and `backend/alembic.ini` relative to the source tree.
 - Production readiness (Deployment-1; nothing deployed): `docs/deployment.md` holds the runtime map, env-var classes, verified production commands, backup/restore policy, the chosen architecture (single VPS, Compose, Caddy, systemd timers), and the Deployment-2 scope. `ENVIRONMENT=production` hides `/docs`, `/redoc`, `/openapi.json`.
 - Production packaging (Deployment-2A; nothing provisioned): `backend/Dockerfile` (one image for the API and every CLI job; editable install at `/app/backend`, so the source-relative `.env`/`alembic.ini` lookups still hold), `frontend/Dockerfile` (build arg `NEXT_PUBLIC_API_BASE_URL=https://<APP_DOMAIN>`), `deploy/docker-compose.production.yml` (only Caddy publishes ports; postgres on an internal network), `deploy/Caddyfile`, `deploy/production.env.example`, `deploy/bin/{ii-compose,backup.sh,notify-failure.sh}`, `deploy/hooks/*.example`, `deploy/systemd/` (update 10:00, backup 11:00, freshness 12:30 Australia/Sydney). Always run the stack through `deploy/bin/ii-compose` (env file `/etc/industry-intelligence/production.env`, overridable with `II_ENV_FILE`/`II_PROJECT` for an isolated local stack). Migrations are explicit (`ii-compose run --rm -T backend alembic upgrade head`), never on start. Runbooks: `docs/cutover.md` (Deployment-2B), `docs/restore.md`. `tests/unit/test_deploy_templates.py` and `test_backup_script.py` pin the templates and backup behaviour.
 
 ```bash
-# backend/ — API server
-../.venv/bin/uvicorn industry_intelligence.main:app --reload
+# repository root — the local app (frontend :3040, backend :8040); idempotent
+./ops/dev/start-local.sh
+./ops/dev/status-local.sh
+./ops/dev/stop-local.sh
+
+# backend/ — API server by hand (same port as the scripts)
+../.venv/bin/python -m uvicorn industry_intelligence.main:app --host 127.0.0.1 --port 8040
 
 # backend/ — unit tests only (no database needed)
 ../.venv/bin/pytest -m "not integration"
@@ -91,8 +97,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.industry-intellige
 ../.venv/bin/python -m industry_intelligence.cli ai-suggestion-list
 ../.venv/bin/python -m industry_intelligence.cli ai-suggestion-accept UUID --reason "evidence"
 
-# frontend/ — dev server (reads NEXT_PUBLIC_API_BASE_URL from frontend/.env.local)
-npm run dev
+# frontend/ — dev server by hand (reads NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8040 from frontend/.env.local)
+source ~/.nvm/nvm.sh && npm run dev -- -p 3040
 # frontend/ — production build and server (NEXT_PUBLIC_API_BASE_URL is inlined at build time)
 npm run build && npm start
 ```

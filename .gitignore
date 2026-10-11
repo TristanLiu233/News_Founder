@@ -32,6 +32,9 @@ frontend/.next/
 frontend/out/
 .pnpm-store/
 
+# Local dev runtime (ops/dev/start-local.sh pid files and logs)
+.runtime/
+
 # Local verification artifacts
 /search-zh-verification.png
 
@@ -39,3 +42,8 @@ frontend/out/
 .DS_Store
 .idea/
 .vscode/
+.env
+.env.*
+!.env.example
+frontend/.env.local
+frontend/.next/

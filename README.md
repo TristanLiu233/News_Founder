@@ -121,6 +121,60 @@ python -m industry_intelligence.cli rank computer
 
 `ingest-all` isolates source failures so one unavailable site does not prevent the other sources from committing. Batch IDs make ingestion retries idempotent. Composite input hashes include the current snapshot IDs and ranking configuration, so identical inputs do not create duplicate runs. Only successful runs are exposed.
 
+## Local development
+
+Daily way to look at the app locally (fixed ports: frontend **3040**, backend **8040**):
+
+```bash
+./ops/dev/start-local.sh    # database check → FastAPI 127.0.0.1:8040 → Next.js localhost:3040
+./ops/dev/status-local.sh   # Postgres / Backend (/health) / Database (/health/db) / Frontend / pid files
+./ops/dev/stop-local.sh     # stops the frontend and backend this script started
+```
+
+Then open <http://localhost:3040>.
+
+- `start-local.sh` checks `.venv`, `~/.nvm/nvm.sh`, `curl`, and the frontend dependencies; makes
+  sure the database named by `.env` `DATABASE_URL` accepts connections; starts uvicorn in the
+  background and waits for `/health` and `/health/db`; keeps the `NEXT_PUBLIC_API_BASE_URL` line of
+  `frontend/.env.local` at `http://127.0.0.1:8040` (other lines are left alone); then starts
+  `npm run dev -- -p 3040` and waits for a 200. If the backend does not become healthy it prints the
+  end of `backend.log`, does not start the frontend, and exits 1. Re-running it reuses running
+  services (no second copy); a port held by another program is reported, never killed.
+- **Database.** The scripts follow `DATABASE_URL`. Locally that is the native PostgreSQL launchd
+  service on `127.0.0.1:5433` ([Local runtime](#local-1--local-runtime-native-postgresql-16));
+  `start-local.sh` loads or kick-starts that service only if it is not accepting connections,
+  and `stop-local.sh` leaves it running because the 10:00 daily update needs it
+  (`stop-local.sh --with-db` unloads it until the next login or `start-local.sh`). Only when
+  `DATABASE_URL` uses the `docker-compose.yml` port does `start-local.sh` run `docker compose up -d db`
+  (waiting for the container health check) and `stop-local.sh` run `docker compose stop db`; the
+  volume is never removed. While the native service is active the Docker database is only the
+  rollback copy, and `status-local.sh` notes it if it is running.
+- **Runtime files.** `.runtime/backend.pid`, `.runtime/frontend.pid` (PID and process start
+  time), `.runtime/backend.log`, `.runtime/frontend.log` (appended per start). `.runtime/` is
+  gitignored. `stop-local.sh` signals only the process group recorded there, after checking
+  the start time and command, and is idempotent; it never uses `pkill`.
+- `.env` `CORS_ORIGINS` must include `http://localhost:3040,http://127.0.0.1:3040` (the
+  production rule rejecting `*` is unchanged).
+- The daily 10:00 launchd update ([Scheduler-1](#scheduler-1--daily-update-at-1000-australiasydney))
+  and these scripts are independent: starting or stopping the UI never fetches sources, rebuilds
+  Events, or calls an AI provider; pages only read persisted data.
+
+Manual start, for troubleshooting (three terminals; the native database is already running):
+
+```bash
+# Terminal 1 — database: native service check (or `docker compose up -d` when DATABASE_URL uses the compose port)
+/opt/anaconda3/envs/ii-pg16/bin/pg_isready -h /tmp -p 5433 -d postgres
+
+# Terminal 2 — backend
+cd backend
+../.venv/bin/python -m uvicorn industry_intelligence.main:app --host 127.0.0.1 --port 8040
+
+# Terminal 3 — frontend
+cd frontend
+source ~/.nvm/nvm.sh
+npm run dev -- -p 3040
+```
+
 ## APIs and UI
 
 | Method | Path | Purpose |
@@ -137,7 +191,7 @@ python -m industry_intelligence.cli rank computer
 | GET | `/api/v1/subjects/{id}` | Canonical subject detail (redirect-aware) |
 | GET | `/api/v1/subjects/{id}/history?limit=30` | Composite rank history from successful runs |
 
-Run the backend with `../.venv/bin/uvicorn industry_intelligence.main:app` and the frontend with `npm run dev`. Source brands and raw external content are never translated. Backend machine values remain English (`gaming`, `up`, `zh-CN`).
+Run the app locally with `./ops/dev/start-local.sh` (see [Local development](#local-development)). Source brands and raw external content are never translated. Backend machine values remain English (`gaming`, `up`, `zh-CN`).
 
 ## Pages
 
@@ -846,9 +900,9 @@ turned it off again after its live quality check.
   run (exit 78, `event=refused` in the log) rather than run at another local time. A Mac asleep at
   10:00 runs the job once when it wakes; a Mac that is off, or with the user logged out, skips
   that day.
-- **Database:** PostgreSQL comes from Docker (`docker compose up -d`); the container has no
-  restart policy and Docker Desktop is not a login item, so the database must be up at 10:00.
-  If it is not, the precheck fails and the run exits `1` with nothing written.
+- **Database:** since Local-1 the native PostgreSQL launchd service (`127.0.0.1:5433`, started
+  at login and kept alive); it must be up at 10:00. If it is not, the precheck fails and the run
+  exits `1` with nothing written. `ops/dev/stop-local.sh` leaves it running for this reason.
 - **Logs:** `~/Library/Logs/industry-intelligence/daily-update.log` (stdout and stderr, appended;
   the wrapper adds `event=start` / `event=finish exit=N` lines, which also cover failures before
   a run can be recorded). A run adds a few KB; truncate the file by hand if it grows. Run

@@ -1783,3 +1783,88 @@ Home, Today, Trending, Search each show one message.
 ### Next step
 
 Stop polishing; observe a few daily runs. No further feature is needed for these two issues.
+
+## 2026-10-01 — Dev-1 — Local One-Command Start / Stop
+
+### Problem
+
+Viewing the app locally needed three hand-started processes (database check, uvicorn, `next dev`)
+on ports that were only a convention (3040 / 8040); the example env files still named 3000 / 8000,
+and nothing could stop exactly what had been started.
+
+### Audit (before any change)
+
+- `.env`: `CORS_ORIGINS=http://localhost:3040,http://127.0.0.1:3040`, `DATABASE_URL` →
+  native PostgreSQL `127.0.0.1:5433` (Local-1). `frontend/.env.local`:
+  `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8040`. Both already matched.
+- Running: native PostgreSQL (launchd `local.industry-intelligence.postgresql`), uvicorn on 8040 and
+  `next dev -p 3040` started by hand in terminal tabs, and the Docker container `app-db-1`
+  (127.0.0.1:5432, healthy) which the app does not use.
+- Conflict: the request said "PostgreSQL via `docker compose up -d`", but the project's database
+  is the native service (LOCAL RUNTIME POLICY; Docker is the rollback copy). Starting Docker would
+  not give the app a database. Decision (keep the architecture): the scripts follow
+  `DATABASE_URL` — native launchd service when it names the native port, `docker compose` only
+  when it names the compose port.
+- Stale: `.env.example` `CORS_ORIGINS=http://localhost:3000`, `frontend/.env.example`
+  `http://localhost:8000`, README Scheduler-1 "PostgreSQL comes from Docker".
+
+### Decisions
+
+- `ops/dev/start-local.sh`: prerequisites (`.venv`, `.env`, `~/.nvm/nvm.sh`, `curl`, `lsof`,
+  frontend `node_modules`); database readiness by a real `SELECT 1` through `Settings` (bounded
+  wait, no fixed sleep); native service bootstrapped or kick-started only when not accepting
+  connections; Docker mode `docker compose up -d db` plus the container health check. Backend
+  `python -m uvicorn … --host 127.0.0.1 --port 8040`, then `/health` and `/health/db` (60 s);
+  on failure: log tail, frontend not started, exit 1. `frontend/.env.local`: only the
+  `NEXT_PUBLIC_API_BASE_URL` line is created or rewritten (other lines kept; change reported).
+  Frontend `npm run dev -- -p 3040` after sourcing nvm, ready on HTTP 200 (120 s).
+- Each server runs in its own process group (`set -m`, `nohup`, stdin `/dev/null`); the pid file
+  holds PID + process start time; ownership = alive + same start time + command regex (npm
+  rewrites its title to `npm run dev -p 3040`, so the regex accepts both forms). Re-running reuses
+  owned services; a port held by a project server started elsewhere is reused with a warning; any
+  other listener is reported and the script exits 1. No `pkill`.
+- `stop-local.sh`: TERM to the recorded group, KILL after 15 s; stale pid files removed;
+  idempotent. Native PostgreSQL is left running by default because the 10:00 daily update needs
+  it (`--with-db` unloads it); Docker mode runs `docker compose stop db` (volume kept).
+- `status-local.sh`: Postgres, Backend (`:8040`, `/health`), Database (`/health/db`), Frontend
+  (`:3040`), pid-file state, and a note when the unused Docker database is running; exit 0 only
+  when all are healthy.
+
+### Data model
+
+None. No migration (head `20260930_12`); no application code, ingestion, AI, or scheduler change.
+
+### Files changed
+
+New `ops/dev/lib.sh`, `ops/dev/start-local.sh`, `ops/dev/stop-local.sh`,
+`ops/dev/status-local.sh`; `.gitignore` (`.runtime/`); `.env.example` (CORS 3040),
+`frontend/.env.example` (8040); README (Local development section, two stale lines); AGENTS.md,
+CLAUDE.md.
+
+### Checks
+
+- `bash -n` passed for all four files; shellcheck is not installed (not added).
+- The hand-started uvicorn (PID 91592) and npm/next group (91990) were stopped first; ports free.
+- start: exit 0 in 5.5 s; `/health` `{"status":"ok"}`, `/health/db`
+  `{"status":"ok","database":"connected"}`, `curl -I localhost:3040` 200; `/`, `/today`,
+  `/trending`, `/events`, `/rankings`, `/companies`, `/search` 200; `Origin: http://localhost:3040`
+  echoed by the API.
+- Ownership: recorded PIDs match; wrong start time, a foreign PID, and the backend PID against the
+  frontend pattern are all rejected.
+- Second start: both reused; exactly 1 uvicorn, 1 `npm run dev`, 1 next-server.
+- status: all healthy, exit 0; after stop: Backend/Frontend stopped, exit 1.
+- stop: exit 0 (frontend and backend stopped, PostgreSQL left running); second stop exit 0 ("not
+  running"); 0 project processes left, ports free, logs kept.
+- Failure paths: stale pid file removed; a foreign `http.server` on 8040 → "port 8040 is in use",
+  exit 1, nothing on 3040; uvicorn rejecting its options at startup (`UVICORN_LOG_LEVEL=bogus`) →
+  log tail, "backend exited during startup; frontend not started", exit 1.
+- Full cycle start → start → status → stop repeated with identical results.
+
+### Known limitations
+
+- The scripts are bash 3.2/macOS oriented (`launchctl`, `lsof`, BSD `ps`).
+- A server started by hand on 3040/8040 is reused but not stopped by `stop-local.sh`.
+- `config.py` keeps its code default `CORS_ORIGINS=http://localhost:3000` (used only when the
+  variable is unset; `.env` sets it). Older isolated preview ports (3010–3050 / 8010–8050) remain
+  only in the local, untracked `.claude/launch.json` and in historical records.
+- The Docker rollback database (`app-db-1`) was found running; it was left as is.
